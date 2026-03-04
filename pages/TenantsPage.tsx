@@ -1,0 +1,397 @@
+// components/TenantsPage.tsx
+import { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  Modal,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+} from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+
+const ACCENT = '#E597A0';
+const ACCENT_LIGHT = '#FDF2F4';
+
+type Tenant = {
+  tenant_id: number;
+  tenant_name: string;
+  email?: string;
+  phone_number?: string;
+  status: boolean;
+};
+
+type Props = {
+  role: 'owner' | 'storeman';
+};
+
+const emptyForm = { tenant_name: '', email: '', phone_number: '' };
+
+export default function TenantsPage({ role }: Props) {
+  const [tenants, setTenants]     = useState<Tenant[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [modalVisible, setModalVisible] = useState(false);
+  const [editTarget, setEditTarget]     = useState<Tenant | null>(null);
+  const [form, setForm]                 = useState(emptyForm);
+  const [saving, setSaving]             = useState(false);
+
+  const fetchTenants = useCallback(async () => {
+    setRefreshing(true);
+    const { data } = await supabase
+      .from('tenants')
+      .select('*')
+      .order('tenant_name');
+    setTenants(data || []);
+    setLoading(false);
+    setRefreshing(false);
+  }, []);
+
+  useEffect(() => { fetchTenants(); }, []);
+
+  const openAdd = () => {
+    setEditTarget(null);
+    setForm(emptyForm);
+    setModalVisible(true);
+  };
+
+  const openEdit = (tenant: Tenant) => {
+    setEditTarget(tenant);
+    setForm({
+      tenant_name:  tenant.tenant_name  || '',
+      email:        tenant.email        || '',
+      phone_number: tenant.phone_number || '',
+    });
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    if (saving) return;
+    setModalVisible(false);
+  };
+
+  const handleSave = async () => {
+    if (!form.tenant_name.trim()) {
+      Alert.alert('Peringatan', 'Nama tenant wajib diisi.');
+      return;
+    }
+    setSaving(true);
+
+    const payload = {
+      tenant_name:  form.tenant_name.trim(),
+      email:        form.email.trim()        || null,
+      phone_number: form.phone_number.trim() || null,
+    };
+
+    const { error } = editTarget
+      ? await supabase.from('tenants').update(payload).eq('tenant_id', editTarget.tenant_id)
+      : await supabase.from('tenants').insert({ ...payload, status: true });
+
+    setSaving(false);
+
+    if (error) {
+      Alert.alert('Gagal', error.message);
+    } else {
+      setModalVisible(false);
+      setForm(emptyForm);
+      fetchTenants();
+    }
+  };
+
+  const toggleActive = async (tenant: Tenant) => {
+    await supabase
+      .from('tenants')
+      .update({ status: !tenant.status })
+      .eq('tenant_id', tenant.tenant_id);
+    fetchTenants();
+  };
+
+  const handleDelete = async (tenant: Tenant) => {
+    if (role !== 'owner') return;
+    Alert.alert(
+      'Hapus Tenant',
+      `Yakin ingin menghapus "${tenant.tenant_name}"? Tindakan ini tidak dapat dibatalkan.`,
+      [
+        { text: 'Batal', style: 'cancel' },
+        {
+          text: 'Hapus', style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase
+              .from('tenants')
+              .delete()
+              .eq('tenant_id', tenant.tenant_id);
+            if (error) Alert.alert('Gagal', error.message);
+            else fetchTenants();
+          },
+        },
+      ]
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={s.center}>
+        <ActivityIndicator size="large" color={ACCENT} />
+      </View>
+    );
+  }
+
+  const rows: Tenant[][] = [];
+  for (let i = 0; i < tenants.length; i += 4) {
+    rows.push(tenants.slice(i, i + 4));
+  }
+
+  const isEditMode = !!editTarget;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#F8F9FB' }}>
+      <FlatList
+        data={rows}
+        keyExtractor={(_, i) => i.toString()}
+        refreshing={refreshing}
+        onRefresh={fetchTenants}
+        contentContainerStyle={{ padding: 16 }}
+        ListHeaderComponent={
+          <View style={s.headerRow}>
+            <View>
+              <Text style={s.headerSub}>{role === 'owner' ? 'Owner' : 'Storeman'}</Text>
+              <Text style={s.heading}>Manajemen Tenant</Text>
+            </View>
+            <View style={s.totalBadge}>
+              <Text style={s.totalBadgeText}>{tenants.length} Tenant</Text>
+            </View>
+          </View>
+        }
+        ListEmptyComponent={
+          <View style={s.center}>
+            <View style={s.emptyIcon}>
+              <MaterialIcons name="storefront" size={32} color="#D1D5DB" />
+            </View>
+            <Text style={s.emptyText}>Belum ada tenant terdaftar</Text>
+          </View>
+        }
+        renderItem={({ item: row }) => (
+          <View style={s.row}>
+            {row.map((item) => (
+              <View key={item.tenant_id} style={s.card}>
+                <View style={s.badgeRow}>
+                  <View style={[s.badge, { backgroundColor: item.status ? '#ECFDF5' : '#F3F4F6' }]}>
+                    <View style={[s.dot, { backgroundColor: item.status ? '#10B981' : '#D1D5DB' }]} />
+                    <Text style={[s.badgeText, { color: item.status ? '#10B981' : '#9CA3AF' }]}>
+                      {item.status ? 'Aktif' : 'Nonaktif'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={[s.avatar, { backgroundColor: item.status ? ACCENT + '15' : '#F3F4F6' }]}>
+                  <MaterialIcons name="storefront" size={22} color={item.status ? ACCENT : '#9CA3AF'} />
+                </View>
+
+                <Text style={s.name} numberOfLines={2}>{item.tenant_name}</Text>
+                {item.email        && <Text style={s.sub} numberOfLines={1}>{item.email}</Text>}
+                {item.phone_number && <Text style={s.sub} numberOfLines={1}>{item.phone_number}</Text>}
+
+                <TouchableOpacity
+                  style={[s.toggleBtn, { backgroundColor: item.status ? ACCENT : '#F3F4F6' }]}
+                  onPress={() => toggleActive(item)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.toggleText, { color: item.status ? '#fff' : '#9CA3AF' }]}>
+                    {item.status ? 'Nonaktifkan' : 'Aktifkan'}
+                  </Text>
+                </TouchableOpacity>
+
+                {role === 'owner' || role === 'storeman' && (
+                  <View style={s.cardActions}>
+                    <TouchableOpacity style={s.editBtn} onPress={() => openEdit(item)} activeOpacity={0.7}>
+                      <MaterialIcons name="edit" size={13} color="#6B7280" />
+                      <Text style={s.editText}>Edit</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s.deleteBtn} onPress={() => handleDelete(item)} activeOpacity={0.7}>
+                      <MaterialIcons name="delete-outline" size={13} color="#EF4444" />
+                      <Text style={s.deleteText}>Hapus</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            ))}
+
+            {row.length < 4 && Array.from({ length: 4 - row.length }).map((_, i) => (
+              <View key={`empty-${i}`} style={s.cardPlaceholder} />
+            ))}
+          </View>
+        )}
+      />
+
+      <TouchableOpacity style={s.fab} onPress={openAdd} activeOpacity={0.85}>
+        <MaterialIcons name="add" size={24} color="#fff" />
+      </TouchableOpacity>
+
+      <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={closeModal}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <Pressable style={s.modalBg} onPress={closeModal}>
+            <Pressable style={s.modalBox}>
+              <View style={s.modalHandle} />
+
+              <View style={s.modalHeader}>
+                <View>
+                  <Text style={s.modalTitle}>{isEditMode ? 'Edit Tenant' : 'Tenant Baru'}</Text>
+                  <Text style={s.modalSub}>
+                    {isEditMode ? editTarget?.tenant_name : 'Tambahkan tenant baru'}
+                  </Text>
+                </View>
+                <TouchableOpacity style={s.closeBtn} onPress={closeModal} disabled={saving}>
+                  <MaterialIcons name="close" size={18} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={s.label}>Nama Tenant <Text style={{ color: ACCENT }}>*</Text></Text>
+              <TextInput
+                style={s.input}
+                placeholder="cth. Warung Pak Budi"
+                placeholderTextColor="#C0C4CC"
+                value={form.tenant_name}
+                onChangeText={(v) => setForm({ ...form, tenant_name: v })}
+              />
+
+              <Text style={s.label}>Email / Kontak</Text>
+              <TextInput
+                style={s.input}
+                placeholder="cth. budi@email.com"
+                placeholderTextColor="#C0C4CC"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                value={form.email}
+                onChangeText={(v) => setForm({ ...form, email: v })}
+              />
+
+              <Text style={s.label}>Nomor HP</Text>
+              <TextInput
+                style={s.input}
+                placeholder="cth. 08123456789"
+                placeholderTextColor="#C0C4CC"
+                keyboardType="phone-pad"
+                value={form.phone_number}
+                onChangeText={(v) => setForm({ ...form, phone_number: v })}
+              />
+
+              <TouchableOpacity
+                style={[s.saveBtn, saving && { opacity: 0.6 }]}
+                onPress={handleSave}
+                disabled={saving}
+                activeOpacity={0.85}
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <MaterialIcons name={isEditMode ? 'save' : 'check'} size={18} color="#fff" />
+                    <Text style={s.saveBtnText}>{isEditMode ? 'Simpan Perubahan' : 'Simpan Tenant'}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+
+  headerRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
+    marginBottom: 16,
+  },
+  headerSub: { fontSize: 11, color: '#9CA3AF', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
+  heading: { fontSize: 22, fontWeight: '800', color: '#111827', marginTop: 2 },
+  totalBadge: { backgroundColor: ACCENT_LIGHT, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  totalBadgeText: { fontSize: 12, fontWeight: '700', color: ACCENT },
+
+  row: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  card: {
+    flex: 1, backgroundColor: '#FAFAFA', borderRadius: 16,
+    borderWidth: 1, borderColor: '#F0F0F0', padding: 12, gap: 6,
+  },
+  cardPlaceholder: { flex: 1 },
+
+  badgeRow: { flexDirection: 'row' },
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, alignSelf: 'flex-start',
+  },
+  dot:       { width: 5, height: 5, borderRadius: 3 },
+  badgeText: { fontSize: 9, fontWeight: '700', letterSpacing: 0.3 },
+
+  avatar: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  name: { fontSize: 13, fontWeight: '700', color: '#111827', lineHeight: 18, marginTop: 2 },
+  sub:  { fontSize: 11, color: '#9CA3AF', lineHeight: 15 },
+
+  toggleBtn: { borderRadius: 8, paddingVertical: 7, alignItems: 'center', marginTop: 2 },
+  toggleText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
+
+  cardActions: { flexDirection: 'row', gap: 6, marginTop: 2 },
+  editBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3,
+    backgroundColor: '#F3F4F6', borderRadius: 7, paddingVertical: 5,
+  },
+  editText:   { fontSize: 10, fontWeight: '600', color: '#6B7280' },
+  deleteBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3,
+    backgroundColor: '#FEF2F2', borderRadius: 7, paddingVertical: 5,
+  },
+  deleteText: { fontSize: 10, fontWeight: '600', color: '#EF4444' },
+
+  emptyIcon: {
+    width: 64, height: 64, borderRadius: 20, backgroundColor: '#F3F4F6',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+  },
+  emptyText: { fontSize: 13, color: '#9CA3AF', fontWeight: '500' },
+
+  fab: {
+    position: 'absolute', bottom: 24, right: 20,
+    width: 52, height: 52, borderRadius: 26, backgroundColor: ACCENT,
+    alignItems: 'center', justifyContent: 'center', elevation: 5,
+    shadowColor: ACCENT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8,
+  },
+
+  modalBg:  { flex: 1, backgroundColor: '#00000055', justifyContent: 'flex-end' },
+  modalBox: {
+    backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    padding: 24, paddingBottom: 36,
+  },
+  modalHandle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: '#E5E7EB', alignSelf: 'center', marginBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 22,
+  },
+  modalTitle: { fontSize: 17, fontWeight: '800', color: '#111827' },
+  modalSub:   { fontSize: 12, color: '#9CA3AF', marginTop: 3 },
+  closeBtn: {
+    width: 32, height: 32, borderRadius: 10,
+    backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+  },
+  label: { fontSize: 12, fontWeight: '600', color: '#374151', marginBottom: 6 },
+  input: {
+    borderWidth: 1, borderColor: '#EEEEEE', borderRadius: 10,
+    padding: 12, fontSize: 14, color: '#111827',
+    backgroundColor: '#FAFAFA', marginBottom: 14,
+  },
+  saveBtn: {
+    backgroundColor: ACCENT, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4,
+  },
+  saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+});
+

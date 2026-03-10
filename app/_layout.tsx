@@ -35,9 +35,10 @@ export default function RootLayout() {
   }, [user, profile, loading, segments]);
 
   const redirectByRole = () => {
-    switch (profile?.role) {
+    if (!profile?.role) return;
+    switch (profile.role) {
       case 'cashier':
-        router.replace('/cashier/transaction');
+        router.replace('/cashier/');
         break;
       case 'storeman':
         router.replace('/storeman/');

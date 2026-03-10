@@ -27,9 +27,7 @@ export default function PaymentScreen() {
   const router = useRouter();
 
   const items         = useCartStore(s => s.items);
-  const discount      = useCartStore(s => s.discount);
   const subtotalFunc  = useCartStore(s => s.subtotal);
-  const taxFunc       = useCartStore(s => s.tax);
   const grandTotalFunc = useCartStore(s => s.grandTotal);
   const clearCart     = useCartStore(s => s.clearCart);
   const profile       = useAuthStore(s => s.profile);
@@ -40,9 +38,8 @@ export default function PaymentScreen() {
 
   const totals = useMemo(() => ({
     sub:   subtotalFunc()   || 0,
-    tax:   taxFunc()        || 0,
     grand: grandTotalFunc() || 0,
-  }), [items, discount]);
+  }), [items]);
 
   const cashAmount = useMemo(() => {
     const n = parseInt(cashIn.replace(/[^0-9]/g, ''), 10);
@@ -93,8 +90,8 @@ export default function PaymentScreen() {
         .insert({
           user_id: profile.id,
           subtotal: totals.sub,
-          tax: totals.tax,
-          discount,
+          tax: 0,
+          discount: 0,
           transaction_status: 'pending',
           tenant_id: profile.tenant_id,
         })
@@ -110,7 +107,7 @@ export default function PaymentScreen() {
           product_id:     item.product_id,
           quantity:       item.quantity,
           unit_price:     item.selling_price,
-          item_discount:  item.item_discount || 0,
+          item_discount:  0,
         }))
       );
 
@@ -177,12 +174,24 @@ export default function PaymentScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={s.container}
     >
+      
+      
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+
+        {/* ── Custom Header ── */}
+      <View style={s.header}>
+        <TouchableOpacity style={s.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+          <MaterialIcons name="arrow-back" size={18} color="#111827" />
+          <Text style={s.backText}>Kembali</Text>
+        </TouchableOpacity>
+
+        <Text style={s.headerTitle}>Pembayaran</Text>
+      </View>
 
         {/* ── Method Switcher ── */}
         <View style={s.switcher}>
@@ -270,10 +279,10 @@ export default function PaymentScreen() {
               </View>
             </View>
 
-            <View style={s.qrBox}>
+            {/* <View style={s.qrBox}>
               <MaterialIcons name="qr-code" size={80} color="#D1D5DB" />
               <Text style={s.qrLabel}>QR Code</Text>
-            </View>
+            </View> */}
 
             <View style={s.qrisAmountRow}>
               <Text style={s.qrisAmountLabel}>Total Tagihan</Text>
@@ -281,6 +290,40 @@ export default function PaymentScreen() {
             </View>
           </View>
         )}
+
+        {/* ── Order Detail ── */}
+        <View style={s.card}>
+          <Text style={s.cardLabel}>Detail Pesanan</Text>
+
+          {items.map((item, index) => (
+            <View key={item.product_id}>
+              <View style={s.orderItem}>
+                <View style={s.orderItemLeft}>
+                  <View style={s.orderQtyBadge}>
+                    <Text style={s.orderQtyText}>{item.quantity}x</Text>
+                  </View>
+                  <View style={s.orderItemInfo}>
+                    <Text style={s.orderItemName} numberOfLines={1}>{item.product_name}</Text>
+                    <Text style={s.orderItemPrice}>{rp(item.selling_price)} / item</Text>
+                  </View>
+                </View>
+                <View style={s.orderItemRight}>
+                  <Text style={s.orderItemTotal}>
+                    {rp(item.selling_price * item.quantity)}
+                  </Text>
+                </View>
+              </View>
+              {index < items.length - 1 && <View style={s.orderDivider} />}
+            </View>
+          ))}
+
+          <View style={s.orderFooter}>
+            <MaterialIcons name="shopping-bag" size={12} color="#9CA3AF" />
+            <Text style={s.orderFooterText}>
+              {items.length} produk · {items.reduce((a, i) => a + i.quantity, 0)} item
+            </Text>
+          </View>
+        </View>
 
         {/* ── Order Summary ── */}
         <View style={s.card}>
@@ -290,16 +333,6 @@ export default function PaymentScreen() {
             <Text style={s.sumLabel}>Subtotal</Text>
             <Text style={s.sumValue}>{rp(totals.sub)}</Text>
           </View>
-          <View style={s.sumRow}>
-            <Text style={s.sumLabel}>Pajak (11%)</Text>
-            <Text style={s.sumValue}>{rp(totals.tax)}</Text>
-          </View>
-          {discount > 0 && (
-            <View style={s.sumRow}>
-              <Text style={s.sumLabel}>Diskon</Text>
-              <Text style={[s.sumValue, { color: ACCENT }]}>- {rp(discount)}</Text>
-            </View>
-          )}
 
           <View style={s.totalDivider} />
 
@@ -369,6 +402,40 @@ const s = StyleSheet.create({
   },
   switchText:       { fontSize: 13, fontWeight: '700', color: '#9CA3AF' },
   switchTextActive: { color: ACCENT },
+  // Header
+  header: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingBottom: 34,
+  backgroundColor: '#F8F9FB',
+  },
+  headerTitle: {
+    position: 'absolute',   // ← lepas dari flow flexbox
+    left: 0,
+    right: 0,
+    textAlign: 'center',    // ← center terhadap lebar penuh header
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    pointerEvents: 'none',  // ← biar tidak block tombol back di belakangnya
+  },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 2,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  backText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  headerCenter: {
+    flex: 1, 
+    alignItems: 'center',
+  },
 
   // Card
   card: {
@@ -437,32 +504,56 @@ const s = StyleSheet.create({
   qrisAmountLabel: { fontSize: 13, color: '#6B7280', fontWeight: '600' },
   qrisAmount:      { fontSize: 20, fontWeight: '800', color: ACCENT },
 
-  // Summary
-  sumRow: {
-    flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8,
-  },
-  sumLabel: { fontSize: 13, color: '#9CA3AF' },
-  sumValue: { fontSize: 13, color: '#374151', fontWeight: '600' },
-  totalDivider: { height: 1, backgroundColor: '#F5F5F5', marginVertical: 12 },
-  totalRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-  },
-  totalLabel: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  totalValue: { fontSize: 24, fontWeight: '800', color: ACCENT },
+    // Order Detail
+    orderItem: {
+      flexDirection: 'row', justifyContent: 'space-between',
+      alignItems: 'center', paddingVertical: 10,
+    },
+    orderItemLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
+    orderQtyBadge: {
+      width: 32, height: 32, borderRadius: 10,
+      backgroundColor: '#FDF2F4', justifyContent: 'center', alignItems: 'center',
+    },
+    orderQtyText:    { fontSize: 12, fontWeight: '800', color: ACCENT },
+    orderItemInfo:   { flex: 1 },
+    orderItemName:   { fontSize: 13, fontWeight: '700', color: '#111827' },
+    orderItemPrice:  { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
+    orderItemRight:  { alignItems: 'flex-end' },
+    orderItemTotal:  { fontSize: 13, fontWeight: '700', color: '#374151' },
+    orderItemDiscount: { fontSize: 11, color: ACCENT, marginTop: 2 },
+    orderDivider:    { height: 1, backgroundColor: '#F5F5F5' },
+    orderFooter: {
+      flexDirection: 'row', alignItems: 'center', gap: 5,
+      marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F5F5F5',
+    },
+    orderFooterText: { fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
 
-  // Footer
-  footer: {
-    paddingHorizontal: 16, paddingVertical: 14,
-    backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#F0F0F0',
-    gap: 10,
-  },
-  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  hintText: { fontSize: 12, color: '#9CA3AF' },
-  confirmBtn: {
-    height: 56, backgroundColor: ACCENT, borderRadius: 16,
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8,
-  },
-  confirmBtnDisabled: { backgroundColor: '#E5E7EB' },
-  confirmText:         { fontSize: 15, fontWeight: '800', color: '#fff', letterSpacing: 0.2 },
-  confirmTextDisabled: { color: '#9CA3AF' },
+    // Summary
+    sumRow: {
+      flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8,
+    },
+    sumLabel: { fontSize: 13, color: '#9CA3AF' },
+    sumValue: { fontSize: 13, color: '#374151', fontWeight: '600' },
+    totalDivider: { height: 1, backgroundColor: '#F5F5F5', marginVertical: 12 },
+    totalRow: {
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    },
+    totalLabel: { fontSize: 15, fontWeight: '800', color: '#111827' },
+    totalValue: { fontSize: 24, fontWeight: '800', color: ACCENT },
+
+    // Footer
+    footer: {
+      paddingHorizontal: 16, paddingVertical: 14,
+      backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#F0F0F0',
+      gap: 10,
+    },
+    hintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    hintText: { fontSize: 12, color: '#9CA3AF' },
+    confirmBtn: {
+      height: 56, backgroundColor: ACCENT, borderRadius: 16,
+      flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8,
+    },
+    confirmBtnDisabled: { backgroundColor: '#E5E7EB' },
+    confirmText:         { fontSize: 15, fontWeight: '800', color: '#fff', letterSpacing: 0.2 },
+    confirmTextDisabled: { color: '#9CA3AF' },
 });

@@ -29,7 +29,7 @@ export default function Index() {
   // Sudah login, cek role
   switch (profile?.role) {
     case 'cashier':
-      return <Redirect href="/cashier/transaction" />;  // langsung ke transaksi
+      return <Redirect href="/cashier/" />;  
     case 'storeman':
       return <Redirect href="/storeman/" />;
     case 'owner':

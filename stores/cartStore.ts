@@ -6,7 +6,6 @@ interface CartItem {
   product_name: string;
   selling_price: number;
   quantity: number;
-  item_discount: number;
   image_url?: string | null;
   available_stock: number;
 }
@@ -14,21 +13,17 @@ interface CartItem {
 interface CartState {
   items: CartItem[];
   transactionId: number | null;
-  discount: number;
   addItem: (product: any) => void;
   removeItem: (productId: number) => void;
   updateQty: (productId: number, qty: number) => void;
-  setDiscount: (amount: number) => void;
   clearCart: () => void;
   subtotal: () => number;
-  tax: () => number;
   grandTotal: () => number;
 }
 
 export const useCartStore = create<CartState>((set, get) => ({
   items: [],
   transactionId: null,
-  discount: 0,
 
   addItem: (product) => {
     const existing = get().items.find(i => i.product_id === product.product_id);
@@ -55,7 +50,6 @@ export const useCartStore = create<CartState>((set, get) => ({
         product_name: product_name,
         selling_price: selling_price,
         quantity: 1, 
-        item_discount: 0,
         image_url: product.image_url,
         available_stock: available_stock
       }] });
@@ -81,14 +75,8 @@ export const useCartStore = create<CartState>((set, get) => ({
     }
   },
 
-  setDiscount: (amount) => {
-    const safeAmount = Number.isFinite(amount) && amount > 0 ? amount : 0;
-    set({ discount: safeAmount });
-  },
+  subtotal: () => get().items.reduce((sum, i) => sum + i.selling_price * i.quantity, 0),
+  grandTotal: () => get().subtotal(),
 
-  subtotal: () => get().items.reduce((sum, i) => sum + (i.selling_price * i.quantity - i.item_discount), 0),
-  tax: () => get().subtotal() * 0.11,  // PPN 11%
-  grandTotal: () => get().subtotal() + get().tax() - get().discount,
-
-  clearCart: () => set({ items: [], transactionId: null, discount: 0 }),
+  clearCart: () => set({ items: [], transactionId: null }),
 }));

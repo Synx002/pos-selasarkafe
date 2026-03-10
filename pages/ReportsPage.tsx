@@ -41,6 +41,7 @@ interface Transaction {
   transaction_id: string;
   created_at: string;
   subtotal: number;
+  grand_total?: number;
   tax: number;
   discount: number;
   transaction_status: string;
@@ -57,9 +58,6 @@ interface Stats {
   revenue: number;
   transactions: number;
   avgTransaction: number;
-  totalTax: number;
-  totalDiscount: number;
-  netRevenue: number;
 }
 
 type ReportsPageProps = {
@@ -80,9 +78,6 @@ export default function ReportsPage({ role }: ReportsPageProps) {
     revenue: 0,
     transactions: 0,
     avgTransaction: 0,
-    totalTax: 0,
-    totalDiscount: 0,
-    netRevenue: 0,
   });
   const [dailyData, setDailyData] = useState<DayData[]>([]);
   const [rawTransactions, setRawTransactions] = useState<Transaction[]>([]);
@@ -120,25 +115,19 @@ export default function ReportsPage({ role }: ReportsPageProps) {
       const txns: Transaction[] = data || [];
       setRawTransactions(txns);
 
-      const revenue = txns.reduce((s, t) => s + (t.subtotal + t.tax - (t.discount || 0)), 0);
-      const totalTax = txns.reduce((s, t) => s + (t.tax || 0), 0);
-      const totalDiscount = txns.reduce((s, t) => s + (t.discount || 0), 0);
-      const netRevenue = revenue - totalTax;
+      const revenue = txns.reduce((s, t) => s + (t.grand_total ?? t.subtotal), 0);
 
       setStats({
         revenue,
         transactions: txns.length,
         avgTransaction: txns.length > 0 ? Math.round(revenue / txns.length) : 0,
-        totalTax,
-        totalDiscount,
-        netRevenue,
       });
 
       const grouped: Record<string, { revenue: number; count: number }> = {};
       [...txns].reverse().forEach((t) => {
         const day = format(new Date(t.created_at), 'yyyy-MM-dd');
         if (!grouped[day]) grouped[day] = { revenue: 0, count: 0 };
-        grouped[day].revenue += t.subtotal + t.tax - (t.discount || 0);
+        grouped[day].revenue += t.grand_total ?? t.subtotal;
         grouped[day].count++;
       });
 
@@ -176,15 +165,13 @@ export default function ReportsPage({ role }: ReportsPageProps) {
         </tr>`).join('');
 
       const txRows = rawTransactions.slice(0, 50).map((t, i) => {
-        const total = t.subtotal + t.tax - (t.discount || 0);
+        const total = t.grand_total ?? t.subtotal;
         return `
         <tr style="background:${i % 2 === 0 ? '#ffffff' : '#fdf2f4'}">
           <td>#${t.transaction_id.toString().slice(-6)}</td>
           <td>${format(new Date(t.created_at), 'dd/MM HH:mm')}</td>
           <td>${t.profiles?.user_name || 'Kasir'}</td>
           <td style="text-align:right">${rp(t.subtotal)}</td>
-          <td style="text-align:right">${rp(t.tax)}</td>
-          <td style="text-align:right">${rp(t.discount || 0)}</td>
           <td style="text-align:right; font-weight:700; color:#E597A0">${rp(total)}</td>
         </tr>`;
       }).join('');
@@ -225,24 +212,9 @@ export default function ReportsPage({ role }: ReportsPageProps) {
         <div class="content">
           <div class="summary-grid">
             <div class="summary-card main">
-              <div class="label">Total Pendapatan Kotor</div>
+              <div class="label">Total Pendapatan</div>
               <div class="value accent">${rp(stats.revenue)}</div>
               <div class="sub">${stats.transactions} transaksi selesai &nbsp;•&nbsp; Rata-rata ${rp(stats.avgTransaction)} / transaksi</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Pendapatan Bersih</div>
-              <div class="value">${rp(stats.netRevenue)}</div>
-              <div class="sub">Setelah pajak</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Total Pajak</div>
-              <div class="value">${rp(stats.totalTax)}</div>
-              <div class="sub">${pct(stats.totalTax, stats.revenue)} dari pendapatan</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Total Diskon</div>
-              <div class="value">${rp(stats.totalDiscount)}</div>
-              <div class="sub">${pct(stats.totalDiscount, stats.revenue)} dari pendapatan</div>
             </div>
           </div>
           ${dailyData.length > 0 ? `
@@ -256,9 +228,9 @@ export default function ReportsPage({ role }: ReportsPageProps) {
           <div class="section-title">Detail Transaksi ${rawTransactions.length > 50 ? '(50 terbaru)' : ''}</div>
           <table>
             <thead>
-              <tr><th>ID</th><th>Waktu</th><th>Kasir</th><th>Subtotal</th><th>Pajak</th><th>Diskon</th><th>Total</th></tr>
+              <tr><th>ID</th><th>Waktu</th><th>Kasir</th><th>Subtotal</th><th>Total</th></tr>
             </thead>
-            <tbody>${txRows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:20px">Tidak ada transaksi</td></tr>'}</tbody>
+            <tbody>${txRows || '<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:20px">Tidak ada transaksi</td></tr>'}</tbody>
           </table>
           <div class="footer">Laporan ini dibuat secara otomatis oleh sistem Selasar Kafe &nbsp;•&nbsp; ${generatedAt}</div>
         </div>
@@ -297,10 +269,7 @@ export default function ReportsPage({ role }: ReportsPageProps) {
         [],
         ['RINGKASAN'],
         ['Keterangan', 'Nilai'],
-        ['Total Pendapatan Kotor', stats.revenue],
-        ['Pendapatan Bersih', stats.netRevenue],
-        ['Total Pajak', stats.totalTax],
-        ['Total Diskon', stats.totalDiscount],
+        ['Total Pendapatan', stats.revenue],
         ['Jumlah Transaksi', stats.transactions],
         ['Rata-rata / Transaksi', stats.avgTransaction],
       ];
@@ -323,15 +292,13 @@ export default function ReportsPage({ role }: ReportsPageProps) {
         XLSX.utils.book_append_sheet(wb, wsDaily, 'Rincian Harian');
       }
 
-      const txHeader = ['ID Transaksi', 'Waktu', 'Kasir', 'Subtotal (Rp)', 'Pajak (Rp)', 'Diskon (Rp)', 'Total (Rp)', 'Status'];
+      const txHeader = ['ID Transaksi', 'Waktu', 'Kasir', 'Subtotal (Rp)', 'Total (Rp)', 'Status'];
       const txRowsExcel = rawTransactions.map((t) => [
         `#${t.transaction_id.toString().slice(-6)}`,
         format(new Date(t.created_at), 'dd/MM/yyyy HH:mm'),
         t.profiles?.user_name || 'Kasir',
         t.subtotal,
-        t.tax,
-        t.discount || 0,
-        t.subtotal + t.tax - (t.discount || 0),
+        t.grand_total ?? t.subtotal,
         t.transaction_status,
       ]);
       const wsDetail = XLSX.utils.aoa_to_sheet([txHeader, ...txRowsExcel]);
@@ -360,7 +327,7 @@ export default function ReportsPage({ role }: ReportsPageProps) {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#f8f9fc' }}>
+    <View style={{ flex: 1, backgroundColor: '#F8F9FB' }}>
       <ScrollView
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[ACCENT]} />}
       >
@@ -416,26 +383,16 @@ export default function ReportsPage({ role }: ReportsPageProps) {
                   <Text style={s.heroBadgeText}>{stats.transactions} Transaksi</Text>
                 </View>
               </View>
-              <Text style={s.heroLabel}>Total Pendapatan Kotor</Text>
+              <Text style={s.heroLabel}>Total Pendapatan</Text>
               <Text style={s.heroValue}>{rp(stats.revenue)}</Text>
               <View style={s.heroSeparator} />
               <View style={s.heroFooterRow}>
-                <View>
-                  <Text style={s.heroFooterLabel}>Pendapatan Bersih</Text>
-                  <Text style={s.heroFooterValue}>{rp(stats.netRevenue)}</Text>
-                </View>
-                <View style={s.heroDivider} />
                 <View>
                   <Text style={s.heroFooterLabel}>Rata-rata / Transaksi</Text>
                   <Text style={s.heroFooterValue}>{rp(stats.avgTransaction)}</Text>
                 </View>
               </View>
             </Surface>
-
-            <View style={s.miniGrid}>
-              <MiniCard label="Total Pajak" value={rp(stats.totalTax)} sub={pct(stats.totalTax, stats.revenue)} icon="receipt" color="#FF9800" />
-              <MiniCard label="Total Diskon" value={rp(stats.totalDiscount)} sub={pct(stats.totalDiscount, stats.revenue)} icon="local-offer" color="#2196F3" />
-            </View>
 
             {dailyData.length > 0 && isOwner && (
               <View style={s.section}>
@@ -478,7 +435,7 @@ export default function ReportsPage({ role }: ReportsPageProps) {
 
               {rawTransactions.length > 0 ? (
                 rawTransactions.map((t, i) => {
-                  const total = t.subtotal + t.tax - (t.discount || 0);
+                  const total = t.grand_total ?? t.subtotal;
                   const detailPath = isOwner ? `/owner/reports/${t.transaction_id}` : 
                                     (role === 'cashier' ? `/cashier/history` : `/storeman/history`);
                   return (

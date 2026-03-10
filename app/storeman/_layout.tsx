@@ -2,12 +2,12 @@
 import Sidebar, { SidebarMenuItem } from '../../components/Sidebar';
 
 const MENU: SidebarMenuItem[] = [
-  { label: 'Dashboard',  icon: 'home',          path: '/storeman' },
+  { label: 'Dashboard',  icon: 'dashboard',     path: '/storeman' },
   { label: 'Tenant',     icon: 'storefront',    path: '/storeman/tenants' },
   { label: 'Produk',     icon: 'inventory',     path: '/storeman/products' },
   { label: 'Stok',       icon: 'move-to-inbox', path: '/storeman/stock' },
   { label: 'Riwayat',    icon: 'history',       path: '/storeman/history' },
-  { label: 'Laporan',    icon: 'bar-chart',     path: '/storeman/reports' },
+  { label: 'Pengaturan', icon: 'settings',      path: '/storeman/settings' },
 ];
 
 export default function StoremanLayout() {

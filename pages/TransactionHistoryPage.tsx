@@ -102,7 +102,7 @@ export default function TransactionHistoryPage({ role }: TransactionHistoryPageP
   const closeDetail = () => setDetailVisible(false);
 
   const getTotal = (item: any) =>
-    item.grand_total ?? item.subtotal + item.tax - (item.discount || 0);
+    item.grand_total ?? item.subtotal;
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -214,13 +214,6 @@ export default function TransactionHistoryPage({ role }: TransactionHistoryPageP
               </View>
               <View style={s.priceDivider} />
               <View style={s.priceCol}>
-                <Text style={s.priceLabel}>Pajak</Text>
-                <Text style={s.priceValueMuted}>
-                  Rp {(t.tax ?? 0).toLocaleString('id-ID')}
-                </Text>
-              </View>
-              <View style={s.priceDivider} />
-              <View style={s.priceCol}>
                 <Text style={s.priceLabel}>Total</Text>
                 <Text style={s.priceValueAccent}>
                   Rp {total.toLocaleString('id-ID')}
@@ -255,15 +248,6 @@ export default function TransactionHistoryPage({ role }: TransactionHistoryPageP
                   value={t.profiles?.user_name ?? 'Kasir'}
                 />
               </View>
-
-              {(t.discount > 0) && (
-                <View style={s.discountBox}>
-                  <MaterialIcons name="local-offer" size={14} color="#059669" />
-                  <Text style={s.discountText}>
-                    Diskon: Rp {(t.discount ?? 0).toLocaleString('id-ID')}
-                  </Text>
-                </View>
-              )}
 
               <View style={s.sectionDivider} />
 

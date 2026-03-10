@@ -1,8 +1,8 @@
 // pages/StockHistoryPage.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
-  ActivityIndicator, StyleSheet,
+  ActivityIndicator, StyleSheet, TextInput,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -24,6 +24,8 @@ export default function StockHistoryPage({ role }: Props) {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'sale' | 'manual_decrease' | 'increase'>('all');
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -55,6 +57,24 @@ export default function StockHistoryPage({ role }: Props) {
     setRefreshing(true);
     fetchLogs();
   };
+
+  const filteredLogs = useMemo(() => {
+    return logs.filter((item) => {
+      const productName = item.products?.product_name?.toLowerCase() || '';
+      const searchLower = search.toLowerCase().trim();
+      if (searchLower && !productName.includes(searchLower)) return false;
+
+      const qtyChange = item.new_quantity - item.old_quantity;
+      const isSale = item.change_type === 'sale';
+      const isIncrease = qtyChange > 0;
+
+      if (filter === 'all') return true;
+      if (filter === 'sale') return isSale;
+      if (filter === 'manual_decrease') return !isSale && qtyChange < 0;
+      if (filter === 'increase') return isIncrease;
+      return true;
+    });
+  }, [logs, search, filter]);
 
   const renderLogItem = ({ item }: { item: any }) => {
     const isSale = item.change_type === 'sale';
@@ -110,13 +130,51 @@ export default function StockHistoryPage({ role }: Props) {
         </TouchableOpacity>
       </View>
 
+      {/* Search */}
+      <View style={s.searchRow}>
+        <MaterialIcons name="search" size={18} color="#9CA3AF" />
+        <TextInput
+          style={s.searchInput}
+          placeholder="Cari nama menu..."
+          placeholderTextColor="#9CA3AF"
+          value={search}
+          onChangeText={setSearch}
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <MaterialIcons name="close" size={16} color="#9CA3AF" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Filter */}
+      <View style={s.filterRow}>
+        {[
+          { key: 'all' as const, label: 'Semua' },
+          { key: 'sale' as const, label: 'Penjualan' },
+          { key: 'manual_decrease' as const, label: 'Kurangi Manual' },
+          { key: 'increase' as const, label: 'Penambahan' },
+        ].map((f) => (
+          <TouchableOpacity
+            key={f.key}
+            style={[s.filterChip, filter === f.key && s.filterChipActive]}
+            onPress={() => setFilter(f.key)}
+            activeOpacity={0.7}
+          >
+            <Text style={[s.filterChipText, filter === f.key && s.filterChipTextActive]}>
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {loading && !refreshing ? (
         <View style={s.center}>
           <ActivityIndicator color={ACCENT} size="large" />
         </View>
       ) : (
         <FlatList
-          data={logs}
+          data={filteredLogs}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderLogItem}
           contentContainerStyle={s.list}
@@ -125,7 +183,9 @@ export default function StockHistoryPage({ role }: Props) {
           ListEmptyComponent={
             <View style={s.empty}>
               <MaterialIcons name="history" size={48} color="#D1D5DB" />
-              <Text style={s.emptyText}>Belum ada riwayat perubahan</Text>
+              <Text style={s.emptyText}>
+                {logs.length === 0 ? 'Belum ada riwayat perubahan' : 'Tidak ada hasil untuk filter ini'}
+              </Text>
             </View>
           }
         />
@@ -144,6 +204,27 @@ const s = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '800', color: '#111827' },
   subtitle: { fontSize: 12, color: '#9CA3AF', marginTop: 1 },
   reloadBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', marginHorizontal: 16, marginTop: 12, marginBottom: 8,
+    paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: '#F0F0F0',
+    height: 44,
+  },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: '#111827' },
+
+  filterRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8,
+    paddingHorizontal: 16, marginBottom: 12, marginTop: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB',
+  },
+  filterChipActive: { backgroundColor: ACCENT, borderColor: ACCENT },
+  filterChipText: { fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  filterChipTextActive: { color: '#fff' },
+
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   list: { padding: 16 },
   logItem: {

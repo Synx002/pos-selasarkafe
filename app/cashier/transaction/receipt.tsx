@@ -1,5 +1,5 @@
-// app/cashier/receipt/[id].tsx
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert } from 'react-native';
+// app/cashier/transaction/receipt.tsx
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
@@ -8,8 +8,17 @@ import { format } from 'date-fns';
 import { id as idLocale } from 'date-fns/locale';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { buildReceiptHtml, buildReceiptEscPos } from '../../../lib/receiptTemplate';
+import { getStoreInfo } from '../../../lib/storeSettings';
+import {
+  isBluetoothPrinterAvailable,
+  getSavedPrinter,
+  connectPrinter,
+  getConnectedAddress,
+  printReceiptEscPos,
+} from '../../../lib/bluetoothPrinter';
 
-const ACCENT = '#E597A0';
+const ACCENT = '#C8576A';
 const ACCENT_LIGHT = '#FDF2F4';
 
 export default function ReceiptScreen() {
@@ -18,10 +27,15 @@ export default function ReceiptScreen() {
   const [transaction, setTransaction] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [printing, setPrinting] = useState(false);
+  const [storeInfo, setStoreInfo] = useState<{ store_name: string; store_address: string } | null>(null);
 
   useEffect(() => {
     if (transactionId) fetchTransaction();
   }, [transactionId]);
+
+  useEffect(() => {
+    getStoreInfo().then(setStoreInfo);
+  }, []);
 
   const fetchTransaction = async () => {
     try {
@@ -39,151 +53,72 @@ export default function ReceiptScreen() {
     }
   };
 
-  // ── Print / Export PDF ──────────────────────────────────────────────────
   const handlePrint = async () => {
     if (!transaction) return;
     setPrinting(true);
     try {
-      const payment = transaction.payments?.[0];
-      const total   = transaction.subtotal + transaction.tax - (transaction.discount || 0);
-      const dateStr = format(new Date(transaction.created_at), 'dd MMMM yyyy, HH:mm', { locale: idLocale });
-
-      const itemRows = transaction.transaction_details?.map((item: any) => `
-        <tr>
-          <td>${item.products?.product_name ?? '-'}</td>
-          <td style="text-align:center">${item.quantity}</td>
-          <td style="text-align:right">Rp ${item.unit_price?.toLocaleString('id-ID')}</td>
-          <td style="text-align:right">Rp ${(item.quantity * item.unit_price).toLocaleString('id-ID')}</td>
-        </tr>`).join('') ?? '';
-
-      const cashSection = payment?.payment_method === 'cash' ? `
-        <div class="cash-row"><span>Tunai</span><span>Rp ${payment.amount_paid?.toLocaleString('id-ID')}</span></div>
-        <div class="cash-row green"><span>Kembalian</span><span>Rp ${payment.change_amount?.toLocaleString('id-ID')}</span></div>` : '';
-
-      const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          * { margin:0; padding:0; box-sizing:border-box; }
-          body { font-family: 'Helvetica Neue', Arial, sans-serif; background:#fff; display:flex; justify-content:center; padding:32px 16px; }
-          
-          .receipt { width:100%; max-width:360px; }
-
-          .header { text-align:center; padding-bottom:20px; border-bottom:2px dashed #F0F0F0; margin-bottom:20px; }
-          .check { width:52px; height:52px; border-radius:50%; background:#ECFDF5; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; }
-          .check svg { width:28px; height:28px; }
-          .cafe-name { font-size:20px; font-weight:800; color:#111827; letter-spacing:-0.3px; }
-          .cafe-addr { font-size:11px; color:#9CA3AF; margin-top:4px; }
-          .date      { font-size:10px; color:#C4C9D4; margin-top:6px; }
-
-          .meta { display:flex; justify-content:space-between; background:#FAFAFA; border-radius:12px; padding:12px 14px; margin-bottom:20px; gap:8px; }
-          .meta-item { text-align:center; flex:1; }
-          .meta-label { font-size:9px; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.7px; font-weight:600; }
-          .meta-value { font-size:12px; font-weight:700; color:#111827; margin-top:3px; }
-          .meta-divider { width:1px; background:#EEEEEE; }
-
-          .items-title { font-size:10px; font-weight:700; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.7px; margin-bottom:10px; }
-          table { width:100%; border-collapse:collapse; margin-bottom:20px; font-size:12px; }
-          th { text-align:left; font-size:9px; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; padding-bottom:8px; border-bottom:1px solid #F5F5F5; }
-          td { padding:8px 0; border-bottom:1px solid #F9F9F9; color:#374151; vertical-align:top; }
-          tr:last-child td { border-bottom:none; }
-
-          .summary { border-top:2px dashed #F0F0F0; padding-top:16px; margin-bottom:16px; }
-          .sum-row { display:flex; justify-content:space-between; margin-bottom:6px; }
-          .sum-label { font-size:12px; color:#9CA3AF; }
-          .sum-value { font-size:12px; color:#374151; font-weight:500; }
-          .total-row { display:flex; justify-content:space-between; margin-top:12px; padding-top:12px; border-top:2px solid #F5F5F5; }
-          .total-label { font-size:14px; font-weight:800; color:#111827; }
-          .total-value { font-size:18px; font-weight:800; color:#E597A0; }
-
-          .cash-section { background:#F0FDF4; border-radius:12px; padding:12px 14px; margin-bottom:20px; }
-          .cash-row { display:flex; justify-content:space-between; font-size:12px; color:#374151; margin-bottom:4px; }
-          .cash-row:last-child { margin-bottom:0; }
-          .cash-row.green span:last-child { color:#16A34A; font-weight:700; }
-
-          .footer { text-align:center; padding-top:16px; border-top:2px dashed #F0F0F0; }
-          .footer-text { font-size:11px; color:#9CA3AF; font-style:italic; }
-          .footer-thanks { font-size:13px; font-weight:700; color:#111827; margin-bottom:4px; }
-        </style>
-      </head>
-      <body>
-        <div class="receipt">
-          <div class="header">
-            <div class="check">
-              <svg viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            </div>
-            <div class="cafe-name">Selasar Kafe</div>
-            <div class="cafe-addr">Jl. Raya No. 123, Bandung</div>
-            <div class="date">${dateStr}</div>
-          </div>
-
-          <div class="meta">
-            <div class="meta-item">
-              <div class="meta-label">No. Struk</div>
-              <div class="meta-value">#${transaction.transaction_id.toString().slice(-6)}</div>
-            </div>
-            <div class="meta-divider"></div>
-            <div class="meta-item">
-              <div class="meta-label">Pembayaran</div>
-              <div class="meta-value">${(payment?.payment_method ?? '-').toUpperCase()}</div>
-            </div>
-            <div class="meta-divider"></div>
-            <div class="meta-item">
-              <div class="meta-label">Status</div>
-              <div class="meta-value" style="color:#10B981">LUNAS</div>
-            </div>
-          </div>
-
-          <div class="items-title">Pesanan</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th style="text-align:center">Qty</th>
-                <th style="text-align:right">Harga</th>
-                <th style="text-align:right">Total</th>
-              </tr>
-            </thead>
-            <tbody>${itemRows}</tbody>
-          </table>
-
-          <div class="summary">
-            <div class="sum-row"><span class="sum-label">Subtotal</span><span class="sum-value">Rp ${transaction.subtotal?.toLocaleString('id-ID')}</span></div>
-            <div class="sum-row"><span class="sum-label">Pajak (11%)</span><span class="sum-value">Rp ${transaction.tax?.toLocaleString('id-ID')}</span></div>
-            ${transaction.discount ? `<div class="sum-row"><span class="sum-label">Diskon</span><span class="sum-value" style="color:#E597A0">- Rp ${transaction.discount?.toLocaleString('id-ID')}</span></div>` : ''}
-            <div class="total-row">
-              <span class="total-label">Total</span>
-              <span class="total-value">Rp ${total.toLocaleString('id-ID')}</span>
-            </div>
-          </div>
-
-          ${payment?.payment_method === 'cash' ? `<div class="cash-section">${cashSection}</div>` : ''}
-
-          <div class="footer">
-            <div class="footer-thanks">Terima kasih! 🌸</div>
-            <div class="footer-text">Sampai jumpa di kunjungan berikutnya</div>
-          </div>
-        </div>
-      </body>
-      </html>`;
-
-      const { uri } = await Print.printToFileAsync({ html, base64: false });
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Cetak / Simpan Struk' });
-      } else {
-        // Fallback: open print dialog directly
-        await Print.printAsync({ html });
+      // Coba cetak ke printer Bluetooth thermal (Android)
+      if (isBluetoothPrinterAvailable()) {
+        const saved = await getSavedPrinter();
+        if (saved) {
+          const connected = await getConnectedAddress();
+          if (connected !== saved.address) {
+            await connectPrinter(saved.address);
+          }
+          const store = await getStoreInfo();
+          const commands = buildReceiptEscPos(transaction, store);
+          await printReceiptEscPos(commands);
+          setPrinting(false);
+          return;
+        }
+        // Bluetooth tersedia tapi printer belum disimpan — tanya user
+        setPrinting(false);
+        Alert.alert(
+          'Printer Belum Dihubungkan',
+          'Untuk mencetak ke printer thermal Bluetooth, Anda harus menghubungkan printer terlebih dahulu di Pengaturan → Printer Struk.\n\nLanjutkan dengan PDF/share?',
+          [
+            { text: 'Batal', style: 'cancel' },
+            {
+              text: 'Ke Pengaturan Printer',
+              onPress: () => router.push('/cashier/settings/printer'),
+            },
+            {
+              text: 'Cetak PDF',
+              onPress: async () => {
+                setPrinting(true);
+                try {
+                  await doPrintPdf(transaction);
+                } catch (e: any) {
+                  Alert.alert('Gagal', e?.message || 'Gagal mencetak struk.');
+                } finally {
+                  setPrinting(false);
+                }
+              },
+            },
+          ]
+        );
+        return;
       }
-    } catch (e) {
+
+      // Fallback: PDF/share (Bluetooth tidak tersedia, mis. iOS / Expo Go)
+      await doPrintPdf(transaction);
+    } catch (e: any) {
       console.error(e);
-      Alert.alert('Gagal', 'Gagal mencetak struk. Coba lagi.');
+      Alert.alert('Gagal', e?.message || 'Gagal mencetak struk. Coba lagi.');
     } finally {
       setPrinting(false);
+    }
+  };
+
+  const doPrintPdf = async (tx: typeof transaction) => {
+    if (!tx) return;
+    const store = await getStoreInfo();
+    const html = buildReceiptHtml(tx, store);
+    const { uri } = await Print.printToFileAsync({ html, base64: false });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Cetak / Simpan Struk' });
+    } else {
+      await Print.printAsync({ html });
     }
   };
 
@@ -212,8 +147,10 @@ export default function ReceiptScreen() {
   }
 
   const payment = transaction.payments?.[0];
-  const total   = transaction.subtotal + transaction.tax - (transaction.discount || 0);
+  const total = transaction.grand_total ?? transaction.subtotal;
   const dateStr = format(new Date(transaction.created_at), 'dd MMMM yyyy, HH:mm', { locale: idLocale });
+  const receiptNo = `#${transaction.transaction_id.toString().padStart(8, '0').slice(-8)}`;
+  const statusLabel = transaction.transaction_status === 'completed' ? 'LUNAS' : (transaction.transaction_status ?? '-').toUpperCase();
 
   return (
     <View style={s.container}>
@@ -222,24 +159,26 @@ export default function ReceiptScreen() {
         contentContainerStyle={s.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Receipt Card ── */}
-        <View style={s.card}>
+        <View style={s.header}>
+          <Text style={s.headerTitle}>Struk Transaksi</Text>
+        </View>
 
-          {/* Header */}
+        {/* Receipt Card - Professional layout */}
+        <View style={s.card}>
+          <View style={s.receiptTopBar} />
           <View style={s.receiptHeader}>
             <View style={s.checkCircle}>
-              <MaterialIcons name="check" size={28} color="#10B981" />
+              <MaterialIcons name="check" size={28} color="#059669" />
             </View>
-            <Text style={s.cafeName}>Selasar Kafe</Text>
-            <Text style={s.cafeAddr}>Jl. Raya No. 123, Bandung</Text>
+            <Text style={s.cafeName}>{storeInfo?.store_name ?? 'Selasar Kafe'}</Text>
+            <Text style={s.cafeAddr}>{storeInfo?.store_address ?? 'Jl. Raya No. 123, Bandung'}</Text>
             <Text style={s.dateText}>{dateStr}</Text>
           </View>
 
-          {/* Meta row */}
           <View style={s.metaRow}>
             <View style={s.metaItem}>
               <Text style={s.metaLabel}>No. Struk</Text>
-              <Text style={s.metaValue}>#{transaction.transaction_id.toString().slice(-6)}</Text>
+              <Text style={s.metaValue}>{receiptNo}</Text>
             </View>
             <View style={s.metaDivider} />
             <View style={s.metaItem}>
@@ -249,15 +188,12 @@ export default function ReceiptScreen() {
             <View style={s.metaDivider} />
             <View style={s.metaItem}>
               <Text style={s.metaLabel}>Status</Text>
-              <Text style={[s.metaValue, { color: '#10B981' }]}>LUNAS</Text>
+              <Text style={[s.metaValue, { color: '#059669' }]}>{statusLabel}</Text>
             </View>
           </View>
 
-          {/* Dashed separator */}
           <View style={s.dashed} />
-
-          {/* Items */}
-          <Text style={s.sectionLabel}>Pesanan</Text>
+          <Text style={s.sectionLabel}>Daftar Pesanan</Text>
           {transaction.transaction_details?.map((item: any, idx: number) => (
             <View key={idx} style={s.itemRow}>
               <View style={{ flex: 1, marginRight: 8 }}>
@@ -268,32 +204,18 @@ export default function ReceiptScreen() {
             </View>
           ))}
 
-          {/* Dashed separator */}
           <View style={s.dashed} />
-
-          {/* Summary */}
-          <View style={s.summaryRow}>
-            <Text style={s.summaryLabel}>Subtotal</Text>
-            <Text style={s.summaryValue}>Rp {transaction.subtotal?.toLocaleString('id-ID')}</Text>
-          </View>
-          <View style={s.summaryRow}>
-            <Text style={s.summaryLabel}>Pajak (11%)</Text>
-            <Text style={s.summaryValue}>Rp {transaction.tax?.toLocaleString('id-ID')}</Text>
-          </View>
-          {transaction.discount ? (
+          <View style={s.summaryBlock}>
             <View style={s.summaryRow}>
-              <Text style={s.summaryLabel}>Diskon</Text>
-              <Text style={[s.summaryValue, { color: ACCENT }]}>- Rp {transaction.discount?.toLocaleString('id-ID')}</Text>
+              <Text style={s.summaryLabel}>Subtotal</Text>
+              <Text style={s.summaryValue}>Rp {transaction.subtotal?.toLocaleString('id-ID')}</Text>
             </View>
-          ) : null}
-
-          {/* Total */}
-          <View style={s.totalRow}>
-            <Text style={s.totalLabel}>Total</Text>
-            <Text style={s.totalValue}>Rp {total.toLocaleString('id-ID')}</Text>
+            <View style={s.totalRow}>
+              <Text style={s.totalLabel}>Total Pembayaran</Text>
+              <Text style={s.totalValue}>Rp {total.toLocaleString('id-ID')}</Text>
+            </View>
           </View>
 
-          {/* Cash section */}
           {payment?.payment_method === 'cash' && (
             <View style={s.cashSection}>
               <View style={s.cashRow}>
@@ -302,17 +224,16 @@ export default function ReceiptScreen() {
               </View>
               <View style={s.cashRow}>
                 <Text style={s.cashLabel}>Kembalian</Text>
-                <Text style={[s.cashValue, { color: '#16A34A', fontWeight: '700' }]}>
+                <Text style={[s.cashValue, { color: '#059669', fontWeight: '700' }]}>
                   Rp {payment.change_amount?.toLocaleString('id-ID')}
                 </Text>
               </View>
             </View>
           )}
 
-          {/* Footer */}
           <View style={s.dashed} />
           <View style={s.receiptFooter}>
-            <Text style={s.footerThanks}>Terima kasih!</Text>
+            <Text style={s.footerThanks}>Terima kasih atas kunjungan Anda</Text>
             <Text style={s.footerSub}>Sampai jumpa di kunjungan berikutnya</Text>
           </View>
         </View>
@@ -335,14 +256,14 @@ export default function ReceiptScreen() {
         </TouchableOpacity>
 
         {/* New transaction */}
-        {/* <TouchableOpacity
+        <TouchableOpacity
           style={s.newBtn}
           onPress={() => router.replace('/cashier/transaction')}
           activeOpacity={0.85}
         >
           <MaterialIcons name="add" size={20} color="#fff" />
           <Text style={s.newBtnText}>Transaksi Baru</Text>
-        </TouchableOpacity> */}
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -358,22 +279,57 @@ const s = StyleSheet.create({
   },
   loadingText:  { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
   notFoundText: { fontSize: 15, color: '#6B7280', fontWeight: '600' },
-  backBtn:      { backgroundColor: ACCENT, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 12 },
-  backBtnText:  { color: '#fff', fontWeight: '700', fontSize: 14 },
+  header: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingTop: Platform.OS === 'ios' ? 56 : 16,
+  paddingBottom: 14,
+
+  },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,  
+  },
+  backBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+
+  backText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  headerTitle: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    pointerEvents: 'none',
+  },
 
   scroll:        { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 8 },
 
   // Receipt card
   card: {
-    backgroundColor: '#fff', borderRadius: 24,
-    borderWidth: 1, borderColor: '#F0F0F0', padding: 20,
+    backgroundColor: '#fff', borderRadius: 16, marginTop: 24,
+    borderWidth: 1, borderColor: '#E5E7EB', overflow: 'hidden',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04, shadowRadius: 12, elevation: 2,
+    shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
+  },
+  receiptTopBar: {
+    height: 4, backgroundColor: ACCENT,
   },
 
   // Header
-  receiptHeader: { alignItems: 'center', paddingBottom: 20, marginBottom: 16 },
+  receiptHeader: { alignItems: 'center', paddingVertical: 20, paddingHorizontal: 20 },
   checkCircle: {
     width: 60, height: 60, borderRadius: 30, backgroundColor: '#ECFDF5',
     alignItems: 'center', justifyContent: 'center', marginBottom: 12,
@@ -384,8 +340,8 @@ const s = StyleSheet.create({
 
   // Meta row
   metaRow: {
-    flexDirection: 'row', backgroundColor: '#FAFAFA', borderRadius: 14,
-    paddingVertical: 12, paddingHorizontal: 8, marginBottom: 20,
+    flexDirection: 'row', backgroundColor: '#F9FAFB',
+    paddingVertical: 14, paddingHorizontal: 16,
   },
   metaItem:    { flex: 1, alignItems: 'center' },
   metaLabel:   { fontSize: 9, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: '600' },
@@ -400,39 +356,43 @@ const s = StyleSheet.create({
 
   // Items
   sectionLabel: {
-    fontSize: 10, fontWeight: '700', color: '#9CA3AF',
-    textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 12,
+    fontSize: 10, fontWeight: '700', color: '#6B7280',
+    textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 12, paddingHorizontal: 20,
   },
   itemRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F9F9F9',
+    paddingVertical: 10, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
   },
-  itemName:  { fontSize: 13, fontWeight: '600', color: '#111827' },
-  itemQty:   { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
+  itemName:  { fontSize: 13, fontWeight: '600', color: '#374151' },
+  itemQty:   { fontSize: 11, color: '#6B7280', marginTop: 2 },
   itemTotal: { fontSize: 13, fontWeight: '700', color: '#374151' },
 
   // Summary
+  summaryBlock: {
+    backgroundColor: '#FAFAFA', padding: 16, marginHorizontal: 20, marginVertical: 4, borderRadius: 12,
+  },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  summaryLabel: { fontSize: 12, color: '#9CA3AF' },
+  summaryLabel: { fontSize: 12, color: '#6B7280' },
   summaryValue: { fontSize: 12, color: '#374151', fontWeight: '500' },
   totalRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginTop: 12, paddingTop: 14, borderTopWidth: 2, borderTopColor: '#F5F5F5',
+    marginTop: 12, paddingTop: 12, borderTopWidth: 2, borderTopColor: '#E5E7EB',
   },
-  totalLabel: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  totalValue: { fontSize: 22, fontWeight: '800', color: ACCENT },
+  totalLabel: { fontSize: 14, fontWeight: '800', color: '#111827' },
+  totalValue: { fontSize: 20, fontWeight: '800', color: ACCENT },
 
   // Cash
   cashSection: {
-    backgroundColor: '#F0FDF4', borderRadius: 12, padding: 14, marginTop: 16,
+    backgroundColor: '#ECFDF5', marginHorizontal: 20, marginTop: 16, padding: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: '#A7F3D0',
   },
   cashRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   cashLabel: { fontSize: 12, color: '#374151' },
   cashValue: { fontSize: 12, color: '#374151' },
 
   // Footer
-  receiptFooter: { alignItems: 'center', paddingTop: 4 },
-  footerThanks: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 4 },
+  receiptFooter: { alignItems: 'center', padding: 20, backgroundColor: '#F9FAFB' },
+  footerThanks: { fontSize: 13, fontWeight: '700', color: '#111827', marginBottom: 4 },
   footerSub:    { fontSize: 11, color: '#9CA3AF', fontStyle: 'italic' },
 
   // Action buttons

@@ -26,15 +26,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       } else {
         set({ loading: false });
       }
-    } catch (error) {
+    } catch (error: any) {
+      const isInvalidRefreshToken =
+        error?.message?.includes('refresh token') ||
+        error?.name === 'AuthApiError';
+      if (isInvalidRefreshToken) {
+        await supabase.auth.signOut();
+      }
       console.error('Auth init error:', error);
-      set({ loading: false });
+      set({ user: null, profile: null, loading: false });
     }
   },
 
   signIn: async (email, password) => {
+    set({ loading: true });
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    if (error) {
+      set({ loading: false });
+      throw error;
+    }
     set({ user: data.user });
     await get().fetchProfile();
   },
@@ -45,11 +55,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   fetchProfile: async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', (await supabase.auth.getUser()).data.user?.id)
-      .single();
-    set({ profile: data, loading: false });
+    try {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (!authUser?.id) {
+        set({ profile: null, loading: false });
+        return;
+      }
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', authUser.id)
+        .single();
+      set({ profile: data ?? null, loading: false });
+    } catch (e) {
+      console.error('Fetch profile error:', e);
+      set({ profile: null, loading: false });
+    }
   },
 }));

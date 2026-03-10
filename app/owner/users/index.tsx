@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  useWindowDimensions,
 } from 'react-native';
 import { Text, ActivityIndicator, Surface } from 'react-native-paper';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -28,13 +29,17 @@ const ROLE_CONFIG: Record<string, { label: string; color: string; bg: string; ic
 interface UserProfile {
   id: string;
   user_name: string;
-  full_name?: string;
   email?: string;
   role: string;
   created_at?: string;
 }
 
+const PHONE_BREAKPOINT = 600;
+
 export default function OwnerUsersScreen() {
+  const { width } = useWindowDimensions();
+  const isPhone = width < PHONE_BREAKPOINT;
+
   const [users, setUsers]       = useState<UserProfile[]>([]);
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -73,7 +78,6 @@ export default function OwnerUsersScreen() {
   const openEdit = (user: UserProfile) => {
     setEditUser(user);
     setEditName(user.user_name || '');
-    setEditFullName(user.full_name || '');
     setEditRole(user.role || 'cashier');
     setEditVisible(true);
   };
@@ -91,7 +95,6 @@ export default function OwnerUsersScreen() {
         .from('profiles')
         .update({
           user_name: editName.trim(),
-          full_name: editFullName.trim(),
           role: editRole,
         })
         .eq('id', editUser.id);
@@ -156,17 +159,15 @@ export default function OwnerUsersScreen() {
         {/* Info */}
         <View style={{ flex: 1 }}>
           <Text style={s.userName} numberOfLines={1}>{item.user_name || 'Tanpa Nama'}</Text>
-          {item.full_name ? (
-            <Text style={s.fullName} numberOfLines={1}>{item.full_name}</Text>
-          ) : null}
-          <Text style={s.email} numberOfLines={1}>{item.email || '-'}</Text>
         </View>
 
-        {/* Role badge */}
-        <View style={[s.roleBadge, { backgroundColor: cfg.bg }]}>
-          <MaterialIcons name={cfg.icon as any} size={11} color={cfg.color} />
-          <Text style={[s.roleText, { color: cfg.color }]}>{cfg.label}</Text>
-        </View>
+        {/* Role badge — disembunyikan di mobile */}
+        {!isPhone && (
+          <View style={[s.roleBadge, { backgroundColor: cfg.bg }]}>
+            <MaterialIcons name={cfg.icon as any} size={11} color={cfg.color} />
+            <Text style={[s.roleText, { color: cfg.color }]}>{cfg.label}</Text>
+          </View>
+        )}
 
         {/* Action buttons */}
         <View style={s.actions}>
@@ -190,7 +191,7 @@ export default function OwnerUsersScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F8F9FC' }}>
+    <View style={{ flex: 1, backgroundColor: '#F8F9FB' }}>
       <FlatList
         data={filtered}
         keyExtractor={(u) => u.id}

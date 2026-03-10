@@ -114,9 +114,13 @@ export function buildReceiptEscPos(
     { type: 'align', value: 'center' },
     { type: 'text', value: thanks },
     { type: 'text', value: sub },
-    // Feed extra agar bagian bawah tidak terpotong
-    { type: 'feed', lines: 4 },
-    { type: 'cut' },
+    // Baris kosong agar teks footer tidak terpotong saat kertas ditarik
+    { type: 'text', value: ' ' },
+    { type: 'text', value: ' ' },
+    { type: 'text', value: ' ' },
+    { type: 'text', value: ' ' },
+    { type: 'text', value: ' ' },
+    { type: 'text', value: ' ' },
   );
 
   return cmds;

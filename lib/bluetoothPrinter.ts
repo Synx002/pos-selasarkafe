@@ -160,6 +160,10 @@ export async function printReceiptEscPos(commands: EscPosCommand[]): Promise<voi
     }
   }
 
-  await escpos.printAndFeed(3);
+  // Gunakan printText kosong sebagai pengganti printAndFeed
+  // karena printAndFeed tidak selalu berpengaruh di semua printer
+  await escpos.printText(' \n\r', opts);
+  await escpos.printText(' \n\r', opts);
+  await escpos.printText(' \n\r', opts);
   await escpos.cutOnePoint();
 }

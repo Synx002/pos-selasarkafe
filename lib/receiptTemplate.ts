@@ -53,7 +53,16 @@ export function buildReceiptEscPos(
   const rp = (v: number) => `Rp ${v.toLocaleString('id-ID')}`;
 
   const thanks = 'Terima kasih atas kunjungan Anda';
-  const sub = 'Sampai jumpa di kunjungan berikutnya';
+  const sub = 'Sampai jumpa kembali!';
+
+  // Printer 58mm = 32 karakter per baris.
+  // padLine: kiri rata kiri, kanan rata kanan, total tepat 32 char.
+  const W = 32;
+  const SEP = '-'.repeat(W);
+  const padLine = (left: string, right: string): string => {
+    const spaces = W - left.length - right.length;
+    return left + ' '.repeat(Math.max(1, spaces)) + right;
+  };
 
   const cmds: EscPosCommand[] = [
     { type: 'align', value: 'center' },
@@ -62,39 +71,52 @@ export function buildReceiptEscPos(
     { type: 'text', value: dateStr },
     { type: 'feed', lines: 1 },
     { type: 'align', value: 'left' },
-    { type: 'text', value: '--------------------------------' },
-    { type: 'text', value: `No: ${receiptNo}  ${(payment?.payment_method ?? '-').toUpperCase()}  ${statusLabel}` },
-    { type: 'text', value: '--------------------------------' },
-    { type: 'text', value: 'Item              Qty    Harga    Total' },
-    { type: 'text', value: '--------------------------------' },
+    { type: 'text', value: SEP },
+    { type: 'text', value: `No: ${receiptNo}` },
+    { type: 'text', value: `${(payment?.payment_method ?? '-').toUpperCase()}  ${statusLabel}` },
+    { type: 'text', value: SEP },
   ];
 
-  for (const item of transaction.transaction_details ?? []) {
-    const name = (item.products?.product_name ?? '-').slice(0, 14);
+  const details = transaction.transaction_details ?? [];
+  let totalQty = 0;
+
+  for (const item of details) {
+    const productName = (item.products?.product_name ?? '-').slice(0, 30);
     const qty = item.quantity ?? 0;
-    const itemTotal = (item.quantity ?? 0) * (item.unit_price ?? 0);
-    cmds.push({ type: 'text', value: `${name} x${qty} ${rp(itemTotal)}` });
+    const unitPrice = item.unit_price ?? 0;
+    const itemTotal = qty * unitPrice;
+    totalQty += qty;
+
+    // Baris 1: nama produk
+    cmds.push({ type: 'text', value: productName });
+    // Baris 2: qty x harga (kiri) | total (kanan)
+    cmds.push({ type: 'text', value: padLine(`  ${qty} x ${rp(unitPrice)}`, rp(itemTotal)) });
   }
 
+  const payMethod = (payment?.payment_method ?? '-').toUpperCase();
+
   cmds.push(
-    { type: 'text', value: '--------------------------------' },
-    { type: 'text', value: `Subtotal                    ${rp(transaction.subtotal ?? 0)}` },
-    { type: 'text', value: `TOTAL                       ${rp(total)}`, bold: true },
+    { type: 'text', value: SEP },
+    { type: 'text', value: padLine('Total Item', `${totalQty} pcs`) },
+    { type: 'text', value: padLine('Total', rp(total)), bold: true },
+    { type: 'text', value: SEP },
+    { type: 'text', value: padLine(`Bayar (${payMethod})`, rp(payment?.amount_paid ?? total)) },
   );
 
   if (payment?.payment_method === 'cash') {
     cmds.push(
-      { type: 'text', value: '--------------------------------' },
-      { type: 'text', value: `Bayar Tunai                 ${rp(payment.amount_paid ?? 0)}` },
-      { type: 'text', value: `Kembalian                   ${rp(payment.change_amount ?? 0)}` },
+      { type: 'text', value: padLine('Kembalian', rp(payment.change_amount ?? 0)) },
     );
   }
 
   cmds.push(
-    { type: 'text', value: '--------------------------------' },
+    { type: 'text', value: SEP },
     { type: 'align', value: 'center' },
     { type: 'text', value: thanks },
     { type: 'text', value: sub },
+    // Feed extra agar bagian bawah tidak terpotong
+    { type: 'feed', lines: 4 },
+    { type: 'cut' },
   );
 
   return cmds;

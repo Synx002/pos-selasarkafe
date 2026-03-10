@@ -6,6 +6,15 @@ import { useAuthStore } from '../../stores/authStore';
 
 const ACCENT = '#E597A0';
 
+// Theme agar label area putih & teks terbaca di device
+const inputTheme = {
+  colors: {
+    background: '#fff',
+    onSurfaceVariant: '#6B7280',
+    outline: '#E8E8E8',
+  },
+};
+
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,9 +56,12 @@ export default function LoginScreen() {
             value={email}
             onChangeText={setEmail}
             style={styles.input}
-            mode="outlined"
-            outlineColor="#F0F0F0"
-            activeOutlineColor={ACCENT}
+            mode="flat"
+            theme={inputTheme}
+            underlineColor="#E8E8E8"
+            activeUnderlineColor={ACCENT}
+            textColor="#111827"
+            contentStyle={styles.inputContent}
             left={<TextInput.Icon icon="email-outline" color="#C0C4CC" />}
           />
           <TextInput
@@ -58,9 +70,12 @@ export default function LoginScreen() {
             onChangeText={setPassword}
             secureTextEntry
             style={styles.input}
-            mode="outlined"
-            outlineColor="#F0F0F0"
-            activeOutlineColor={ACCENT}
+            mode="flat"
+            theme={inputTheme}
+            underlineColor="#E8E8E8"
+            activeUnderlineColor={ACCENT}
+            textColor="#111827"
+            contentStyle={styles.inputContent}
             left={<TextInput.Icon icon="lock-outline" color="#C0C4CC" />}
           />
           <Button
@@ -141,8 +156,11 @@ const styles = StyleSheet.create({
   },
   input: {
     marginBottom: 12,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: '#fff',
     fontSize: 14,
+  },
+  inputContent: {
+    color: '#111827',
   },
   button: {
     marginTop: 6,

@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
+import { syncWithdrawalsForCurrentWeek } from '../lib/withdrawalService';
 
 const ACCENT       = '#E597A0';
 const ACCENT_LIGHT = '#FDF2F4';
@@ -45,6 +46,7 @@ export default function TenantsPage({ role }: Props) {
   const [tenants, setTenants]       = useState<Tenant[]>([]);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingWithdrawalIds, setPendingWithdrawalIds] = useState<Set<number>>(new Set());
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editTarget, setEditTarget]     = useState<Tenant | null>(null);
@@ -53,13 +55,37 @@ export default function TenantsPage({ role }: Props) {
 
   const [menuTenant, setMenuTenant] = useState<Tenant | null>(null);
 
+  const [pendingAmountByTenant, setPendingAmountByTenant] = useState<Record<number, number>>({});
+  const [hasWithdrawnByTenant, setHasWithdrawnByTenant] = useState<Set<number>>(new Set());
+
   const fetchTenants = useCallback(async () => {
     setRefreshing(true);
-    const { data } = await supabase
-      .from('tenants')
-      .select('*')
-      .order('tenant_name');
-    setTenants(data || []);
+    await syncWithdrawalsForCurrentWeek();
+    const [tenantsRes, withdrawalsRes] = await Promise.all([
+      supabase.from('tenants').select('*').order('tenant_name'),
+      supabase.from('tenant_withdrawals').select('tenant_id, amount, withdrawn_amount, status'),
+    ]);
+    setTenants(tenantsRes.data || []);
+    const ids = new Set<number>();
+    const amounts: Record<number, number> = {};
+    const withdrawn = new Set<number>();
+    for (const w of withdrawalsRes.data || []) {
+      let pending = 0;
+      if (w.status === 'pending') {
+        pending = w.amount || 0;
+      } else if (w.status === 'withdrawn') {
+        withdrawn.add(w.tenant_id);
+        const paid = w.withdrawn_amount ?? w.amount ?? 0;
+        pending = Math.max(0, (w.amount || 0) - paid);
+      }
+      if (pending > 0) {
+        ids.add(w.tenant_id);
+        amounts[w.tenant_id] = (amounts[w.tenant_id] || 0) + pending;
+      }
+    }
+    setPendingWithdrawalIds(ids);
+    setPendingAmountByTenant(amounts);
+    setHasWithdrawnByTenant(withdrawn);
     setLoading(false);
     setRefreshing(false);
   }, []);
@@ -189,6 +215,28 @@ export default function TenantsPage({ role }: Props) {
         <Text style={s.name} numberOfLines={2}>{item.tenant_name}</Text>
         {item.email        && <Text style={s.sub} numberOfLines={1}>{item.email}</Text>}
         {item.phone_number && <Text style={s.sub} numberOfLines={1}>{item.phone_number}</Text>}
+        <View style={s.payoutBadgeWrap}>
+          {pendingWithdrawalIds.has(item.tenant_id) ? (
+            <View style={[s.payoutBadge, s.payoutBadgePending]}>
+              <MaterialIcons name="pending" size={10} color="#F59E0B" />
+              <Text style={[s.payoutBadgeText, { color: '#F59E0B' }]} numberOfLines={1}>
+                Belum {(pendingAmountByTenant[item.tenant_id] || 0) >= 1e6
+                  ? `Rp ${((pendingAmountByTenant[item.tenant_id] || 0) / 1e6).toFixed(1)}jt`
+                  : `Rp ${(pendingAmountByTenant[item.tenant_id] || 0).toLocaleString('id-ID')}`}
+              </Text>
+            </View>
+          ) : hasWithdrawnByTenant.has(item.tenant_id) ? (
+            <View style={[s.payoutBadge, s.payoutBadgeDone]}>
+              <MaterialIcons name="check-circle" size={10} color="#10B981" />
+              <Text style={[s.payoutBadgeText, { color: '#10B981' }]}>Sudah</Text>
+            </View>
+          ) : (
+            <View style={[s.payoutBadge, s.payoutBadgeEmpty]}>
+              <MaterialIcons name="remove-circle-outline" size={10} color="#9CA3AF" />
+              <Text style={[s.payoutBadgeText, { color: '#9CA3AF' }]}>Rp 0</Text>
+            </View>
+          )}
+        </View>
       </TouchableOpacity>
     </View>
   );
@@ -209,8 +257,22 @@ export default function TenantsPage({ role }: Props) {
             <Text style={s.headerSub}>{role === 'owner' ? 'Owner' : 'Storeman'}</Text>
             <Text style={s.heading}>Manajemen Tenant</Text>
           </View>
-          <View style={s.totalBadge}>
-            <Text style={s.totalBadgeText}>{tenants.length} Tenant</Text>
+          <View style={s.headerRight}>
+            <TouchableOpacity
+              style={s.refreshBtn}
+              onPress={fetchTenants}
+              disabled={refreshing}
+              activeOpacity={0.7}
+            >
+              {refreshing ? (
+                <ActivityIndicator size="small" color={ACCENT} />
+              ) : (
+                <MaterialIcons name="refresh" size={22} color={ACCENT} />
+              )}
+            </TouchableOpacity>
+            <View style={s.totalBadge}>
+              <Text style={s.totalBadgeText}>{tenants.length} Tenant</Text>
+            </View>
           </View>
         </View>
 
@@ -365,6 +427,12 @@ const s = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
     marginBottom: 16, paddingTop: 8, paddingHorizontal: 16,
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  refreshBtn: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
+    alignItems: 'center', justifyContent: 'center',
+  },
   headerSub:      { fontSize: 11, color: '#9CA3AF', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
   heading:        { fontSize: 22, fontWeight: '800', color: '#111827', marginTop: 2 },
   totalBadge:     { backgroundColor: ACCENT_LIGHT, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
@@ -380,7 +448,23 @@ const s = StyleSheet.create({
     gap: 6,
   },
 
-  badgeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap' },
+  pendingWithdrawalBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#FFFBEB', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12,
+    marginTop: 6, alignSelf: 'flex-start',
+  },
+  pendingWithdrawalText: { fontSize: 9, fontWeight: '700', color: '#F59E0B' },
+  payoutBadgeWrap: { minHeight: 24, marginTop: 6, justifyContent: 'flex-end' },
+  payoutBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  payoutBadgePending: { backgroundColor: '#FFFBEB' },
+  payoutBadgeDone:   { backgroundColor: '#ECFDF5' },
+  payoutBadgeEmpty:  { backgroundColor: '#F3F4F6' },
+  payoutBadgeText:   { fontSize: 9, fontWeight: '700' },
   kebabBtn: {
     width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
   },

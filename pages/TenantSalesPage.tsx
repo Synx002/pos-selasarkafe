@@ -11,13 +11,19 @@ import {
   useWindowDimensions,
   Modal,
   Pressable,
-  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../lib/supabase';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import {
+  getOrCreateWithdrawal,
+  getWithdrawalHistory,
+  markWithdrawn,
+  type TenantWithdrawal,
+  type WithdrawalWithUser,
+} from '../lib/withdrawalService';
+import { useAuthStore } from '../stores/authStore';
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks, subWeeks } from 'date-fns';
 import { id as idLocale } from 'date-fns/locale';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -45,6 +51,7 @@ interface ProductStats {
   purchase_price: number;
   totalQty: number;
   totalRevenue: number;
+  totalTenantPayout: number; // harga beli × qty = yang dibayar ke tenant
   totalMargin: number;
 }
 
@@ -52,6 +59,7 @@ interface TransactionGroup {
   transaction_id: string;
   created_at: string;
   total: number;
+  tenantPayout: number;
   margin: number;
   items: { product_name: string; quantity: number; unit_price: number }[];
 }
@@ -61,19 +69,27 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
   const { width } = useWindowDimensions();
 
   const now = new Date();
+  const getWeekRange = (d: Date) => ({
+    from: startOfWeek(d, { weekStartsOn: 1 }),
+    to: endOfWeek(d, { weekStartsOn: 1 }),
+  });
+  const thisWeek = getWeekRange(now);
+
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tenant, setTenant]         = useState<TenantInfo | null>(null);
-  const [dateFrom, setDateFrom]     = useState<Date>(startOfDay(subDays(now, 6)));
-  const [dateTo, setDateTo]         = useState<Date>(endOfDay(now));
-  const [showDateModal, setShowDateModal] = useState(false);
-  const [pickerMode, setPickerMode] = useState<'from' | 'to' | null>(null);
+  const [dateFrom, setDateFrom]     = useState<Date>(thisWeek.from);
+  const [dateTo, setDateTo]         = useState<Date>(thisWeek.to);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [withdrawal, setWithdrawal] = useState<TenantWithdrawal | null>(null);
+  const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalWithUser[]>([]);
+  const [markingWithdrawn, setMarkingWithdrawn] = useState(false);
 
   // Computed stats
-  const [totalRevenue, setTotalRevenue]     = useState(0);
-  const [totalMargin, setTotalMargin]       = useState(0);
+  const [totalRevenue, setTotalRevenue]       = useState(0);
+  const [totalTenantPayout, setTotalTenantPayout] = useState(0); // yang dibayar ke tenant (harga beli)
+  const [totalMargin, setTotalMargin]         = useState(0);
   const [transactionCount, setTransactionCount] = useState(0);
   const [productStats, setProductStats]     = useState<ProductStats[]>([]);
   const [transactions, setTransactions]     = useState<TransactionGroup[]>([]);
@@ -109,7 +125,11 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
       const rows = details || [];
 
       // 4. Compute stats
+      // revenue = pendapatan penjualan (harga jual × qty)
+      // tenantPayout = yang dibayar ke tenant (harga beli × qty)
+      // margin = laba owner (revenue - tenantPayout)
       let revenue = 0;
+      let tenantPayout = 0;
       let margin  = 0;
       const prodMap = new Map<number, ProductStats>();
       const txMap   = new Map<string, TransactionGroup>();
@@ -119,9 +139,11 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
         const unitPrice     = row.unit_price || 0;
         const purchasePrice = row.products?.purchase_price || 0;
         const itemRevenue   = unitPrice * qty;
+        const itemTenantPayout = purchasePrice * qty;
         const itemMargin    = (unitPrice - purchasePrice) * qty;
 
         revenue += itemRevenue;
+        tenantPayout += itemTenantPayout;
         margin  += itemMargin;
 
         // Product stats
@@ -129,18 +151,20 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
         if (pid) {
           const existing = prodMap.get(pid);
           if (existing) {
-            existing.totalQty     += qty;
-            existing.totalRevenue += itemRevenue;
-            existing.totalMargin  += itemMargin;
+            existing.totalQty          += qty;
+            existing.totalRevenue      += itemRevenue;
+            existing.totalTenantPayout += itemTenantPayout;
+            existing.totalMargin       += itemMargin;
           } else {
             prodMap.set(pid, {
-              product_id:     pid,
-              product_name:   row.products.product_name,
-              selling_price:  row.products.selling_price,
-              purchase_price: purchasePrice,
-              totalQty:       qty,
-              totalRevenue:   itemRevenue,
-              totalMargin:    itemMargin,
+              product_id:          pid,
+              product_name:        row.products.product_name,
+              selling_price:       row.products.selling_price,
+              purchase_price:     purchasePrice,
+              totalQty:            qty,
+              totalRevenue:        itemRevenue,
+              totalTenantPayout:   itemTenantPayout,
+              totalMargin:         itemMargin,
             });
           }
         }
@@ -155,14 +179,16 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
             unit_price:   unitPrice,
           };
           if (existingTx) {
-            existingTx.total  += itemRevenue;
-            existingTx.margin += itemMargin;
+            existingTx.total         += itemRevenue;
+            existingTx.tenantPayout  += itemTenantPayout;
+            existingTx.margin       += itemMargin;
             existingTx.items.push(item);
           } else {
             txMap.set(txId, {
               transaction_id: txId,
               created_at:     row.transactions.created_at,
               total:          itemRevenue,
+              tenantPayout:   itemTenantPayout,
               margin:         itemMargin,
               items:          [item],
             });
@@ -171,7 +197,15 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
       }
 
       setTotalRevenue(revenue);
+      setTotalTenantPayout(tenantPayout);
       setTotalMargin(margin);
+
+      // 5. Withdrawal: buat record baru jika ada transaksi baru setelah periode sudah dibayar (history bertambah)
+      const w = await getOrCreateWithdrawal(tenantId, fromDate, toDate, tenantPayout);
+      setWithdrawal(w);
+
+      const history = await getWithdrawalHistory(tenantId);
+      setWithdrawalHistory(history);
 
       const prodArr = Array.from(prodMap.values()).sort((a, b) => b.totalRevenue - a.totalRevenue);
       setProductStats(prodArr);
@@ -196,9 +230,108 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
     fetchData();
   }, [fetchData]);
 
+  const user = useAuthStore((s) => s.user);
+
+  const canMarkWithdrawn = withdrawal && user?.id && withdrawal.status === 'pending' && (withdrawal.amount || 0) > 0;
+
+  const handleMarkWithdrawn = useCallback(async () => {
+    if (!withdrawal || !user?.id) return;
+    setMarkingWithdrawn(true);
+    try {
+      const { success, error } = await markWithdrawn(withdrawal.id, user.id);
+      if (success) {
+        setWithdrawal({
+          ...withdrawal,
+          status: 'withdrawn',
+          withdrawn_amount: withdrawal.amount,
+          withdrawn_at: new Date().toISOString(),
+          withdrawn_by: user.id,
+        });
+        const history = await getWithdrawalHistory(tenantId);
+        setWithdrawalHistory(history);
+      } else {
+        alert(error || 'Gagal menandai');
+      }
+    } catch (e) {
+      alert('Gagal menandai penarikan');
+    } finally {
+      setMarkingWithdrawn(false);
+    }
+  }, [withdrawal, user?.id, tenantId]);
+
   const marginPct = totalRevenue > 0
     ? ((totalMargin / totalRevenue) * 100).toFixed(1)
     : '0';
+
+  const handleExportHistoryPDF = async () => {
+    if (!tenant) return;
+    setExporting(true);
+    setShowExportModal(false);
+    try {
+      const dateStr = format(new Date(), 'dd MMMM yyyy, HH:mm', { locale: idLocale });
+      const rp = (v: number) => `Rp ${v.toLocaleString('id-ID')}`;
+      const totalSudah = withdrawalHistory.filter((w) => w.status === 'withdrawn').reduce(
+        (a, w) => a + (w.withdrawn_amount ?? w.amount ?? 0), 0
+      );
+      const totalBelum = withdrawalHistory.reduce((a, w) => {
+        if (w.status === 'pending') return a + (w.amount || 0);
+        const paid = w.withdrawn_amount ?? w.amount ?? 0;
+        return a + Math.max(0, (w.amount || 0) - paid);
+      }, 0);
+      const rows = withdrawalHistory.map((w) => {
+        const meta = w.status === 'withdrawn' && w.withdrawn_at
+          ? `Dibayar ${format(new Date(w.withdrawn_at), 'dd MMM yyyy HH:mm', { locale: idLocale })}${w.withdrawn_by_name ? ` oleh ${w.withdrawn_by_name}` : ''}`
+          : 'Belum dibayar';
+        return `<tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:8px 0;">${format(new Date(w.period_start), 'd MMM', { locale: idLocale })} - ${format(new Date(w.period_end), 'd MMM yyyy', { locale: idLocale })}</td>
+          <td style="padding:8px 0; text-align:right; font-weight:700;">${rp(w.amount)}</td>
+          <td style="padding:8px 0;">${w.status === 'withdrawn' ? 'Sudah' : 'Pending'}</td>
+          <td style="padding:8px 0; font-size:11px; color:#6b7280;">${meta}</td>
+        </tr>`;
+      }).join('');
+      const html = `
+        <html>
+          <body style="font-family: Arial, sans-serif; padding: 40px; color: #1a1a1a;">
+            <h1 style="color: #E597A0; margin-bottom: 4px;">Riwayat Pembayaran ke Tenant</h1>
+            <p style="color: #6b7280; font-size: 14px; margin-bottom: 4px;">${tenant.tenant_name}</p>
+            <p style="color: #9ca3af; font-size: 12px; margin-bottom: 24px;">Digenerate: ${dateStr}</p>
+            <div style="display:flex; gap:20px; margin-bottom:24px;">
+              <div style="background:#ECFDF5; padding:16px 24px; border-radius:12px; flex:1;">
+                <p style="margin:0; font-size:11px; color:#059669;">Sudah dibayar</p>
+                <p style="margin:4px 0 0; font-size:20px; font-weight:800; color:#059669;">${rp(totalSudah)}</p>
+              </div>
+              <div style="background:#FFFBEB; padding:16px 24px; border-radius:12px; flex:1;">
+                <p style="margin:0; font-size:11px; color:#D97706;">Belum dibayar</p>
+                <p style="margin:4px 0 0; font-size:20px; font-weight:800; color:#D97706;">${rp(totalBelum)}</p>
+              </div>
+            </div>
+            <h3 style="border-bottom: 2px solid #E597A0; padding-bottom: 8px; margin-bottom: 12px;">Detail per Periode</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="text-align: left; color: #6b7280; font-size: 11px;">
+                  <th style="padding-bottom: 8px;">PERIODE</th>
+                  <th style="padding-bottom: 8px;">HARGA BELI</th>
+                  <th style="padding-bottom: 8px;">STATUS</th>
+                  <th style="padding-bottom: 8px;">KETERANGAN</th>
+                </tr>
+              </thead>
+              <tbody>${rows || '<tr><td colspan="4" style="text-align:center; color:#9ca3af; padding:20px;">Belum ada riwayat</td></tr>'}</tbody>
+            </table>
+          </body>
+        </html>`;
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Riwayat Pembayaran' });
+      } else {
+        alert('PDF berhasil dibuat');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Gagal export PDF');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleExportPDF = async (type: 'tenant' | 'owner') => {
     if (!tenant) return;
@@ -214,7 +347,7 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
             <td style="padding:8px 0;">${i + 1}</td>
             <td style="padding:8px 0;">${p.product_name}</td>
             <td style="padding:8px 0; text-align:right;">${p.totalQty}</td>
-            <td style="padding:8px 0; text-align:right;">${rp(p.totalRevenue)}</td>
+            <td style="padding:8px 0; text-align:right;">${rp(p.totalTenantPayout)}</td>
           </tr>`;
         }
         return `<tr style="border-bottom:1px solid #f0f0f0;">
@@ -233,7 +366,7 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
             <td style="padding:8px 0;">#${tx.transaction_id.toString().slice(-6)}</td>
             <td style="padding:8px 0;">${format(new Date(tx.created_at), 'dd MMM HH:mm', { locale: idLocale })}</td>
             <td style="padding:8px 0;">${itemsStr}</td>
-            <td style="padding:8px 0; text-align:right; font-weight:700;">${rp(tx.total)}</td>
+            <td style="padding:8px 0; text-align:right; font-weight:700;">${rp(tx.tenantPayout)}</td>
           </tr>`;
         }
         return `<tr style="border-bottom:1px solid #f0f0f0;">
@@ -252,11 +385,11 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
             <h1 style="color: #E597A0; margin-bottom: 4px;">Laporan Penjualan</h1>
             <p style="color: #6b7280; font-size: 14px; margin-bottom: 4px;">${tenant.tenant_name}</p>
             <p style="color: #9ca3af; font-size: 12px; margin-bottom: 24px;">Periode: ${dateRangeLabel} • Digenerate: ${dateStr}</p>
-            <p style="color: #6b7280; font-size: 11px; font-weight: 600; margin-bottom: 16px;">UNTUK TENANT — Rincian pendapatan tanpa margin</p>
+            <p style="color: #6b7280; font-size: 11px; font-weight: 600; margin-bottom: 16px;">UNTUK TENANT — Berdasarkan harga beli (yang dibayarkan ke tenant)</p>
 
             <div style="background: #fdf2f4; border: 1px solid #e8a0ab; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
-              <p style="margin: 0; color: #6b7280; font-size: 11px; font-weight: 700;">TOTAL PENDAPATAN</p>
-              <h2 style="margin: 8px 0 0 0; font-size: 28px;">${rp(totalRevenue)}</h2>
+              <p style="margin: 0; color: #6b7280; font-size: 11px; font-weight: 700;">TOTAL YANG DIBAYARKAN KE TENANT</p>
+              <h2 style="margin: 8px 0 0 0; font-size: 28px;">${rp(totalTenantPayout)}</h2>
               <p style="margin: 8px 0 0 0; color: #6b7280; font-size: 13px;">${transactionCount} transaksi</p>
             </div>
 
@@ -267,7 +400,7 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
                   <th style="padding-bottom: 8px;">#</th>
                   <th style="padding-bottom: 8px;">NAMA</th>
                   <th style="padding-bottom: 8px; text-align: right;">QTY</th>
-                  <th style="padding-bottom: 8px; text-align: right;">PENDAPATAN</th>
+                  <th style="padding-bottom: 8px; text-align: right;">HARGA BELI</th>
                 </tr>
               </thead>
               <tbody>${productRows}</tbody>
@@ -280,7 +413,7 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
                   <th style="padding-bottom: 8px;">ID</th>
                   <th style="padding-bottom: 8px;">WAKTU</th>
                   <th style="padding-bottom: 8px;">ITEMS</th>
-                  <th style="padding-bottom: 8px; text-align: right;">TOTAL</th>
+                  <th style="padding-bottom: 8px; text-align: right;">HARGA BELI</th>
                 </tr>
               </thead>
               <tbody>${txRows || '<tr><td colspan="4" style="text-align:center; color:#9ca3af; padding:20px;">Tidak ada transaksi</td></tr>'}</tbody>
@@ -397,95 +530,37 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
           )}
         </View>
 
-        {/* Date Range Picker */}
+        {/* Week navigator — periode mingguan Senin–Minggu */}
         <View style={s.periodRow}>
           <TouchableOpacity
-            style={s.dateRangeBtn}
-            onPress={() => setShowDateModal(true)}
-            activeOpacity={0.8}
+            style={s.weekNavBtn}
+            onPress={() => {
+              const prev = subWeeks(dateFrom, 1);
+              const r = getWeekRange(prev);
+              setDateFrom(r.from);
+              setDateTo(r.to);
+            }}
+            activeOpacity={0.7}
           >
-            <MaterialIcons name="calendar-today" size={18} color={ACCENT} />
-            <Text style={s.dateRangeText}>{dateRangeLabel}</Text>
-            <MaterialIcons name="expand-more" size={18} color="#6B7280" />
+            <MaterialIcons name="chevron-left" size={24} color={ACCENT} />
+          </TouchableOpacity>
+          <View style={s.weekNavCenter}>
+            <Text style={s.weekNavLabel}>Senin – Minggu</Text>
+            <Text style={s.weekNavDates}>{dateRangeLabel}</Text>
+          </View>
+          <TouchableOpacity
+            style={s.weekNavBtn}
+            onPress={() => {
+              const next = addWeeks(dateFrom, 1);
+              const r = getWeekRange(next);
+              setDateFrom(r.from);
+              setDateTo(r.to);
+            }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="chevron-right" size={24} color={ACCENT} />
           </TouchableOpacity>
         </View>
-
-        {/* Date Picker Modal */}
-        <Modal visible={showDateModal} transparent animationType="fade">
-          <Pressable style={s.modalOverlay} onPress={() => setShowDateModal(false)}>
-            <Pressable style={s.dateModalContent} onPress={(e) => e.stopPropagation()}>
-              <View style={s.dateModalHeader}>
-                <Text style={s.dateModalTitle}>Pilih Periode</Text>
-                <TouchableOpacity onPress={() => setShowDateModal(false)}>
-                  <MaterialIcons name="close" size={22} color="#6B7280" />
-                </TouchableOpacity>
-              </View>
-
-              <View style={s.dateRow}>
-                <Text style={s.dateLabel}>Dari</Text>
-                <TouchableOpacity
-                  style={s.dateValueBtn}
-                  onPress={() => setPickerMode('from')}
-                >
-                  <Text style={s.dateValueText}>
-                    {format(dateFrom, 'd MMMM yyyy', { locale: idLocale })}
-                  </Text>
-                  <MaterialIcons name="edit-calendar" size={18} color={ACCENT} />
-                </TouchableOpacity>
-              </View>
-
-              <View style={s.dateRow}>
-                <Text style={s.dateLabel}>Sampai</Text>
-                <TouchableOpacity
-                  style={s.dateValueBtn}
-                  onPress={() => setPickerMode('to')}
-                >
-                  <Text style={s.dateValueText}>
-                    {format(dateTo, 'd MMMM yyyy', { locale: idLocale })}
-                  </Text>
-                  <MaterialIcons name="edit-calendar" size={18} color={ACCENT} />
-                </TouchableOpacity>
-              </View>
-
-              {pickerMode && (
-                <DateTimePicker
-                  value={pickerMode === 'from' ? dateFrom : dateTo}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, selectedDate) => {
-                    if (selectedDate) {
-                      if (pickerMode === 'from') {
-                        setDateFrom(startOfDay(selectedDate));
-                        if (selectedDate > dateTo) setDateTo(endOfDay(selectedDate));
-                      } else {
-                        setDateTo(endOfDay(selectedDate));
-                        if (selectedDate < dateFrom) setDateFrom(startOfDay(selectedDate));
-                      }
-                    }
-                    if (Platform.OS === 'android') setPickerMode(null);
-                  }}
-                />
-              )}
-
-              {Platform.OS === 'ios' && pickerMode && (
-                <TouchableOpacity
-                  style={s.pickerDoneBtn}
-                  onPress={() => setPickerMode(null)}
-                >
-                  <Text style={s.pickerDoneText}>Selesai</Text>
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-                style={s.applyBtn}
-                onPress={() => { setShowDateModal(false); setPickerMode(null); }}
-                activeOpacity={0.85}
-              >
-                <Text style={s.applyBtnText}>Terapkan</Text>
-              </TouchableOpacity>
-            </Pressable>
-          </Pressable>
-        </Modal>
 
         {/* Export PDF Modal */}
         <Modal visible={showExportModal} transparent animationType="fade">
@@ -530,6 +605,21 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
               </TouchableOpacity>
 
               <TouchableOpacity
+                style={s.exportOption}
+                onPress={handleExportHistoryPDF}
+                activeOpacity={0.85}
+              >
+                <View style={[s.exportOptionIcon, { backgroundColor: '#FEF3C7' }]}>
+                  <MaterialIcons name="history" size={24} color="#D97706" />
+                </View>
+                <View style={s.exportOptionBody}>
+                  <Text style={s.exportOptionTitle}>Riwayat Pembayaran</Text>
+                  <Text style={s.exportOptionDesc}>Daftar pembayaran ke tenant dengan tanggal & siapa yang menandai. Untuk bukti ke tenant.</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={20} color="#9CA3AF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
                 style={[s.applyBtn, { marginTop: 16, backgroundColor: '#F3F4F6' }]}
                 onPress={() => setShowExportModal(false)}
                 activeOpacity={0.85}
@@ -554,23 +644,57 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
                 <View style={s.heroIconBg}>
                   <MaterialIcons name="account-balance-wallet" size={24} color={ACCENT} />
                 </View>
-                <View style={s.heroBadge}>
-                  <MaterialIcons name="check-circle" size={12} color="#10B981" />
-                  <Text style={s.heroBadgeText}>{transactionCount} Transaksi</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={s.heroBadge}>
+                    <MaterialIcons name="check-circle" size={12} color="#10B981" />
+                    <Text style={s.heroBadgeText}>{transactionCount} Transaksi</Text>
+                  </View>
+                  {withdrawal && (
+                    <View style={[s.withdrawalBadge, withdrawal.status === 'withdrawn' ? s.withdrawalBadgeDone : s.withdrawalBadgePending]}>
+                      <MaterialIcons
+                        name={withdrawal.status === 'withdrawn' ? 'check-circle' : 'pending'}
+                        size={12}
+                        color={withdrawal.status === 'withdrawn' ? '#10B981' : '#F59E0B'}
+                      />
+                      <Text style={[s.withdrawalBadgeText, { color: withdrawal.status === 'withdrawn' ? '#10B981' : '#F59E0B' }]}>
+                        {withdrawal.status === 'withdrawn' ? 'Sudah diambil' : 'Belum diambil'}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
-              <Text style={s.heroLabel}>TOTAL PENDAPATAN TENANT</Text>
-              <Text style={s.heroValue}>{rp(totalRevenue)}</Text>
+              <Text style={s.heroLabel}>NOMINAL YANG HARUS DIBAYARKAN KE TENANT</Text>
+              <Text style={s.heroSubLabel}>Harga beli • Periode {dateRangeLabel}</Text>
+              <Text style={s.heroValue}>
+                {rp(withdrawal?.status === 'pending' ? (withdrawal.amount || 0) : 0)}
+              </Text>
+              {canMarkWithdrawn && (
+                <TouchableOpacity
+                  style={[s.markWithdrawnBtn, markingWithdrawn && { opacity: 0.7 }]}
+                  onPress={handleMarkWithdrawn}
+                  disabled={markingWithdrawn}
+                  activeOpacity={0.85}
+                >
+                  {markingWithdrawn ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <MaterialIcons name="done-all" size={18} color="#fff" />
+                      <Text style={s.markWithdrawnText}>Tandai sudah diambil</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )}
               <View style={s.heroSeparator} />
               <View style={s.heroFooterRow}>
                 <View>
-                  <Text style={s.heroFooterLabel}>MARGIN</Text>
-                  <Text style={s.heroFooterValue}>{rp(totalMargin)}</Text>
+                  <Text style={s.heroFooterLabel}>REVENUE</Text>
+                  <Text style={s.heroFooterValue}>{rp(totalRevenue)}</Text>
                 </View>
                 <View style={s.heroDivider} />
                 <View>
-                  <Text style={s.heroFooterLabel}>% MARGIN</Text>
-                  <Text style={s.heroFooterValue}>{marginPct}%</Text>
+                  <Text style={s.heroFooterLabel}>MARGIN</Text>
+                  <Text style={[s.heroFooterValue, { color: '#16A34A' }]}>{rp(totalMargin)}</Text>
                 </View>
                 <View style={s.heroDivider} />
                 <View>
@@ -606,17 +730,68 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
               </View>
             </View>
 
-            {/* ── Produk Terlaris ── */}
+            {/* ── Summary & Riwayat penarikan ── */}
+            <View style={s.section}>
+              <View style={s.sectionHeader}>
+                <View style={s.sectionAccent} />
+                <Text style={s.sectionTitle}>Pembayaran ke Tenant</Text>
+                <Text style={s.sectionSub}>Periode mingguan • Berdasarkan harga beli</Text>
+              </View>
+              <View style={s.summaryRow}>
+                <View style={s.summaryCard}>
+                  <Text style={s.summaryLabel}>Sudah dibayar (seluruh waktu)</Text>
+                  <Text style={[s.summaryValue, { color: '#10B981' }]}>
+                    {rp(withdrawalHistory.filter((w) => w.status === 'withdrawn').reduce(
+                      (a, w) => a + (w.withdrawn_amount ?? w.amount ?? 0), 0
+                    ))}
+                  </Text>
+                </View>
+                <View style={s.summaryCard}>
+                  <Text style={s.summaryLabel}>Belum dibayar (seluruh waktu)</Text>
+                  <Text style={[s.summaryValue, { color: '#F59E0B' }]}>
+                    {rp(withdrawalHistory.reduce((a, w) => {
+                      if (w.status === 'pending') return a + (w.amount || 0);
+                      const paid = w.withdrawn_amount ?? w.amount ?? 0;
+                      return a + Math.max(0, (w.amount || 0) - paid);
+                    }, 0))}
+                  </Text>
+                </View>
+              </View>
+              {withdrawalHistory.length > 0 && withdrawalHistory.slice(0, 12).map((w) => (
+                <View key={w.id} style={s.historyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.historyPeriod}>
+                      {format(new Date(w.period_start), 'd MMM', { locale: idLocale })} - {format(new Date(w.period_end), 'd MMM yyyy', { locale: idLocale })}
+                    </Text>
+                    <Text style={s.historyAmountLabel}>Harga beli</Text>
+                    <Text style={s.historyAmount}>{rp(w.amount)}</Text>
+                    {w.status === 'withdrawn' && w.withdrawn_at && (
+                      <Text style={s.historyMeta}>
+                        Dibayar {format(new Date(w.withdrawn_at), 'dd MMM yyyy, HH:mm', { locale: idLocale })}
+                        {w.withdrawn_by_name ? ` oleh ${w.withdrawn_by_name}` : ''}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={[s.historyBadge, w.status === 'withdrawn' ? s.historyBadgeDone : s.historyBadgePending]}>
+                    <Text style={[s.historyBadgeText, { color: w.status === 'withdrawn' ? '#10B981' : '#F59E0B' }]}>
+                      {w.status === 'withdrawn' ? 'Sudah' : 'Pending'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* ── Detail produk terjual ── */}
             {productStats.length > 0 && (
               <View style={s.section}>
                 <View style={s.sectionHeader}>
                   <View style={s.sectionAccent} />
-                  <Text style={s.sectionTitle}>Produk Tenant</Text>
-                  <Text style={s.sectionSub}>{productStats.length} produk</Text>
+                  <Text style={s.sectionTitle}>Detail Produk Terjual</Text>
+                  <Text style={s.sectionSub}>{productStats.length} produk • {dateRangeLabel}</Text>
                 </View>
 
                 {productStats.map((p, i) => {
-                  const barPct = totalRevenue > 0 ? p.totalRevenue / totalRevenue : 0;
+                  const barPct = totalTenantPayout > 0 ? p.totalTenantPayout / totalTenantPayout : 0;
                   return (
                     <View key={p.product_id} style={s.productCard}>
                       <View style={s.productTop}>
@@ -628,7 +803,7 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
                           <Text style={s.productQty}>{p.totalQty} terjual</Text>
                         </View>
                         <View style={{ alignItems: 'flex-end' }}>
-                          <Text style={s.productRevenue}>{rp(p.totalRevenue)}</Text>
+                          <Text style={s.productPayout}>{rp(p.totalTenantPayout)}</Text>
                           <Text style={s.productMargin}>Margin: {rp(p.totalMargin)}</Text>
                         </View>
                       </View>
@@ -717,13 +892,17 @@ const s = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: '700' },
 
   // Date Range
-  periodRow: { paddingHorizontal: 16, marginBottom: 16 },
-  dateRangeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 12,
-    borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB',
+  periodRow: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 16, gap: 12,
   },
-  dateRangeText: { fontSize: 14, fontWeight: '600', color: '#111827', flex: 1 },
+  weekNavBtn: {
+    width: 44, height: 44, borderRadius: 12,
+    backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  weekNavCenter: { flex: 1, alignItems: 'center' },
+  weekNavLabel: { fontSize: 11, color: '#9CA3AF', fontWeight: '600', textTransform: 'uppercase' },
+  weekNavDates: { fontSize: 15, fontWeight: '700', color: '#111827', marginTop: 2 },
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center', alignItems: 'center', padding: 20,
@@ -737,6 +916,17 @@ const s = StyleSheet.create({
     marginBottom: 20,
   },
   dateModalTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  periodPresetLabel: {
+    fontSize: 11, color: '#9CA3AF', fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8,
+  },
+  periodPresetBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#F9FAFB', paddingHorizontal: 14, paddingVertical: 12,
+    borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: '#F0F0F0',
+  },
+  periodPresetText: { fontSize: 14, fontWeight: '700', color: '#111827', flex: 1 },
+  periodPresetSub: { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
   dateRow: { marginBottom: 16 },
   dateLabel: { fontSize: 12, color: '#9CA3AF', fontWeight: '600', marginBottom: 6 },
   dateValueBtn: {
@@ -796,10 +986,24 @@ const s = StyleSheet.create({
     backgroundColor: '#ECFDF5', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20,
   },
   heroBadgeText: { fontSize: 11, fontWeight: '700', color: '#059669' },
+  withdrawalBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20,
+  },
+  withdrawalBadgeDone: { backgroundColor: '#ECFDF5' },
+  withdrawalBadgePending: { backgroundColor: '#FFFBEB' },
+  withdrawalBadgeText: { fontSize: 11, fontWeight: '700' },
+  markWithdrawnBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 14, paddingVertical: 12, backgroundColor: '#10B981',
+    borderRadius: 12,
+  },
+  markWithdrawnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   heroLabel: {
     fontSize: 11, color: '#9CA3AF', fontWeight: '600',
     textTransform: 'uppercase', letterSpacing: 0.8,
   },
+  heroSubLabel: { fontSize: 12, color: '#6B7280', marginTop: 4, fontWeight: '500' },
   heroValue: {
     fontSize: 28, fontWeight: '800', color: '#111827',
     marginTop: 4, letterSpacing: -0.5,
@@ -834,6 +1038,19 @@ const s = StyleSheet.create({
   sectionAccent: { width: 3, height: 20, backgroundColor: ACCENT, borderRadius: 2 },
   sectionTitle:  { fontSize: 16, fontWeight: '700', color: '#111827', flex: 1 },
   sectionSub:    { fontSize: 12, color: '#9CA3AF', fontWeight: '600' },
+  summaryRow:    { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  summaryCard:   { flex: 1, backgroundColor: '#F9FAFB', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#F0F0F0' },
+  summaryLabel:  { fontSize: 11, color: '#6B7280', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryValue:  { fontSize: 18, fontWeight: '800', marginTop: 4 },
+  historyRow:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FAFAFA', padding: 12, borderRadius: 12, marginBottom: 6, borderWidth: 1, borderColor: '#F0F0F0' },
+  historyPeriod: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  historyAmountLabel: { fontSize: 10, color: '#9CA3AF', fontWeight: '600', marginTop: 2 },
+  historyAmount: { fontSize: 14, fontWeight: '800', color: ACCENT, marginTop: 2 },
+  historyMeta: { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
+  historyBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  historyBadgeDone:   { backgroundColor: '#ECFDF5' },
+  historyBadgePending: { backgroundColor: '#FFFBEB' },
+  historyBadgeText:   { fontSize: 11, fontWeight: '700' },
 
   // Product list
   productCard: {
@@ -850,6 +1067,7 @@ const s = StyleSheet.create({
   productName:     { fontSize: 13, fontWeight: '700', color: '#1F2937' },
   productQty:      { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   productRevenue:  { fontSize: 14, fontWeight: '800', color: ACCENT },
+  productPayout:   { fontSize: 14, fontWeight: '800', color: ACCENT },
   productMargin:   { fontSize: 11, color: '#16A34A', fontWeight: '600', marginTop: 2 },
   barTrack: { height: 4, backgroundColor: '#F0F0F0', borderRadius: 2, overflow: 'hidden' },
   barFill:  { height: 4, backgroundColor: ACCENT + '80', borderRadius: 2 },

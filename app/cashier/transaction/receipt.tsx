@@ -241,6 +241,16 @@ export default function ReceiptScreen() {
 
       {/* ── Action Buttons ── */}
       <View style={s.actions}>
+        {/* New transaction */}
+        <TouchableOpacity
+          style={s.newBtn}
+          onPress={() => router.replace('/cashier/transaction')}
+          activeOpacity={0.85}
+        >
+          <MaterialIcons name="add" size={20} color={ACCENT} />
+          <Text style={s.newBtnText}>Transaksi Baru</Text>
+        </TouchableOpacity>
+        
         {/* Print */}
         <TouchableOpacity
           style={[s.printBtn, printing && { opacity: 0.7 }]}
@@ -249,21 +259,12 @@ export default function ReceiptScreen() {
           activeOpacity={0.85}
         >
           {printing
-            ? <MaterialIcons name="hourglass-top" size={20} color={ACCENT} />
-            : <MaterialIcons name="print" size={20} color={ACCENT} />
+            ? <MaterialIcons name="hourglass-top" size={20} color="#fff" />
+            : <MaterialIcons name="print" size={20} color="#fff" />
           }
           <Text style={s.printBtnText}>{printing ? 'Mencetak...' : 'Cetak Struk'}</Text>
         </TouchableOpacity>
 
-        {/* New transaction */}
-        <TouchableOpacity
-          style={s.newBtn}
-          onPress={() => router.replace('/cashier/transaction')}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="add" size={20} color="#fff" />
-          <Text style={s.newBtnText}>Transaksi Baru</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -402,13 +403,13 @@ const s = StyleSheet.create({
   },
   printBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: ACCENT, borderRadius: 16, paddingVertical: 14,
+  },
+  printBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  newBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     borderWidth: 1.5, borderColor: ACCENT, borderRadius: 16, paddingVertical: 14,
     backgroundColor: ACCENT_LIGHT,
   },
-  printBtnText: { fontSize: 14, fontWeight: '700', color: ACCENT },
-  newBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: ACCENT, borderRadius: 16, paddingVertical: 14,
-  },
-  newBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  newBtnText: { fontSize: 14, fontWeight: '700', color:ACCENT },
 });

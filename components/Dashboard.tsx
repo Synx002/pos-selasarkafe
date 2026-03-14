@@ -184,9 +184,10 @@ export default function Dashboard({ role }: DashboardProps) {
       setNetProfit(profit);
 
       // ── All roles: top products ─────────────────────────────────────────────
-      // Owner: gunakan periode date picker. Storeman/Cashier: bulan berjalan
-      const topSince = isOwner ? since : startOfMonth(new Date()).toISOString();
-      const topUntil = isOwner ? until : endOfDay(new Date()).toISOString();
+      // Owner: gunakan periode date picker. Storeman/Cashier: bulan ini
+      const nowDate = new Date();
+      const topSince = isOwner ? since : startOfMonth(nowDate).toISOString();
+      const topUntil = isOwner ? until : endOfMonth(nowDate).toISOString();
       const { data: topTxns } = await supabase
         .from('transactions')
         .select('transaction_id')
@@ -319,12 +320,12 @@ export default function Dashboard({ role }: DashboardProps) {
       `).join('');
 
       const rp = (v: number) => `Rp ${v.toLocaleString('id-ID')}`;
-      const statCards = [
+      const baseStatCards = [
         { label: 'Menu Terjual', value: totalMenuSold, prev: prevMenuSold, suffix: 'item', isCurrency: false },
         { label: 'Total Transaksi', value: totalTransactions, prev: prevTransactions, suffix: 'transaksi', isCurrency: false },
         { label: 'Produk Terjual', value: totalProductsSold, prev: prevProductsSold, suffix: 'produk', isCurrency: false },
-        { label: 'Laba Bersih', value: netProfit, prev: prevNetProfit, suffix: 'laba', isCurrency: true },
-      ].map((s) => {
+      ];
+      const statCards = (isOwner ? [...baseStatCards, { label: 'Laba Bersih', value: netProfit, prev: prevNetProfit, suffix: '', isCurrency: true }] : baseStatCards).map((s) => {
         const diff = s.value - s.prev;
         const pct = s.prev > 0 ? ((diff / s.prev) * 100).toFixed(1) : (s.value > 0 ? '100' : '0');
         const diffLabel = s.isCurrency ? `${diff >= 0 ? '+' : ''}${rp(diff)}` : `${diff >= 0 ? '+' : ''}${diff.toLocaleString('id-ID')}`;
@@ -345,7 +346,7 @@ export default function Dashboard({ role }: DashboardProps) {
       });
       const statRowsHtml = `
         <tr>${statCards.slice(0, 2).join('')}</tr>
-        <tr>${statCards.slice(2, 4).join('')}</tr>
+        <tr>${statCards.slice(2, 3).join('')}</tr>
       `;
 
       const topProductRows = topProducts.map((p, i) => `
@@ -380,7 +381,7 @@ export default function Dashboard({ role }: DashboardProps) {
           </div>` : ''}
 
           <div>
-            <h3 style="border-bottom: 2px solid #C8576A; padding-bottom: 8px; margin-bottom: 16px;">Top Menu Terlaris (${activeFilterLabel})</h3>
+            <h3 style="border-bottom: 2px solid #C8576A; padding-bottom: 8px; margin-bottom: 16px;">Top Menu Terlaris (${isOwner ? activeFilterLabel : 'Bulan Ini'})</h3>
             <table style="width: 100%; border-collapse: collapse;">
               <thead>
                 <tr style="text-align: left; color: #6b7280; font-size: 12px;">
@@ -600,17 +601,19 @@ export default function Dashboard({ role }: DashboardProps) {
           current={totalProductsSold}
           cardStyle={isPhone ? s.statCardPhone : undefined}
         />
-        <StatCard
-          icon="trending-up"
-          iconColor={ACCENT}
-          label="Laba Bersih"
-          value={`Rp ${netProfit.toLocaleString('id-ID')}`}
-          suffix='laba'
-          prev={prevNetProfit}
-          current={netProfit}
-          isCurrency
-          cardStyle={isPhone ? s.statCardPhone : undefined}
-        />
+        {isOwner && (
+          <StatCard
+            icon="account-balance-wallet"
+            iconColor="#16A34A"
+            label="Laba Bersih"
+            value={`Rp ${netProfit.toLocaleString('id-ID')}`}
+            suffix=""
+            prev={prevNetProfit}
+            current={netProfit}
+            isCurrency
+            cardStyle={isPhone ? s.statCardPhone : undefined}
+          />
+        )}
       </View>
 
       {/* ── Low Stock Warning — visible to ALL roles ── */}

@@ -4,6 +4,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   RefreshControl,
   StyleSheet,
@@ -85,6 +86,11 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
   const [withdrawal, setWithdrawal] = useState<TenantWithdrawal | null>(null);
   const [withdrawalHistory, setWithdrawalHistory] = useState<WithdrawalWithUser[]>([]);
   const [markingWithdrawn, setMarkingWithdrawn] = useState(false);
+
+  // Modal "Lihat Semua"
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyFilter, setHistoryFilter]       = useState<'all' | 'pending' | 'withdrawn'>('all');
+  const [showTxModal, setShowTxModal]           = useState(false);
 
   // Computed stats
   const [totalRevenue, setTotalRevenue]       = useState(0);
@@ -757,28 +763,15 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
                   </Text>
                 </View>
               </View>
-              {withdrawalHistory.length > 0 && withdrawalHistory.slice(0, 12).map((w) => (
-                <View key={w.id} style={s.historyRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.historyPeriod}>
-                      {format(new Date(w.period_start), 'd MMM', { locale: idLocale })} - {format(new Date(w.period_end), 'd MMM yyyy', { locale: idLocale })}
-                    </Text>
-                    <Text style={s.historyAmountLabel}>Harga beli</Text>
-                    <Text style={s.historyAmount}>{rp(w.amount)}</Text>
-                    {w.status === 'withdrawn' && w.withdrawn_at && (
-                      <Text style={s.historyMeta}>
-                        Dibayar {format(new Date(w.withdrawn_at), 'dd MMM yyyy, HH:mm', { locale: idLocale })}
-                        {w.withdrawn_by_name ? ` oleh ${w.withdrawn_by_name}` : ''}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={[s.historyBadge, w.status === 'withdrawn' ? s.historyBadgeDone : s.historyBadgePending]}>
-                    <Text style={[s.historyBadgeText, { color: w.status === 'withdrawn' ? '#10B981' : '#F59E0B' }]}>
-                      {w.status === 'withdrawn' ? 'Sudah' : 'Pending'}
-                    </Text>
-                  </View>
-                </View>
+              {withdrawalHistory.slice(0, 5).map((w) => (
+                <HistoryRow key={w.id} w={w} rp={rp} locale={idLocale} />
               ))}
+              {withdrawalHistory.length > 5 && (
+                <TouchableOpacity style={s.showAllBtn} onPress={() => setShowHistoryModal(true)}>
+                  <Text style={s.showAllText}>Lihat Semua Riwayat ({withdrawalHistory.length})</Text>
+                  <MaterialIcons name="chevron-right" size={18} color={ACCENT} />
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* ── Detail produk terjual ── */}
@@ -832,21 +825,17 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
               </View>
 
               {transactions.length > 0 ? (
-                transactions.map((tx, i) => (
-                  <View key={tx.transaction_id} style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.txId}>#{tx.transaction_id.toString().slice(-6)}</Text>
-                      <Text style={s.txTime}>
-                        {format(new Date(tx.created_at), 'dd MMM HH:mm', { locale: idLocale })}
-                      </Text>
-                      <Text style={s.txItems} numberOfLines={1}>
-                        {tx.items.map(it => `${it.quantity}× ${it.product_name}`).join(', ')}
-                      </Text>
-                    </View>
-                    <Text style={[s.td, s.tdAmount, { width: 90 }]}>{rp(tx.total)}</Text>
-                    <Text style={[s.td, s.tdMargin, { width: 80 }]}>{rp(tx.margin)}</Text>
-                  </View>
-                ))
+                <>
+                  {transactions.slice(0, 10).map((tx, i) => (
+                    <TxRow key={tx.transaction_id} tx={tx} i={i} rp={rp} locale={idLocale} />
+                  ))}
+                  {transactions.length > 10 && (
+                    <TouchableOpacity style={s.showAllBtn} onPress={() => setShowTxModal(true)}>
+                      <Text style={s.showAllText}>Lihat Semua Transaksi ({transactions.length})</Text>
+                      <MaterialIcons name="chevron-right" size={18} color={ACCENT} />
+                    </TouchableOpacity>
+                  )}
+                </>
               ) : (
                 <View style={s.emptyState}>
                   <MaterialIcons name="receipt-long" size={40} color="#D1D5DB" />
@@ -857,6 +846,120 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
           </View>
         )}
       </ScrollView>
+
+      {/* ── Modal Riwayat Pembayaran ─────────────────────────────────────── */}
+      <Modal visible={showHistoryModal} transparent animationType="slide">
+        <Pressable style={s.sheetOverlay} onPress={() => setShowHistoryModal(false)}>
+          <Pressable style={s.bottomSheet}>
+            <View style={s.sheetHandle} />
+            <View style={s.sheetHeader}>
+              <Text style={s.sheetTitle}>Riwayat Pembayaran</Text>
+              <TouchableOpacity onPress={() => setShowHistoryModal(false)} style={s.sheetClose}>
+                <MaterialIcons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Filter chips */}
+            <View style={s.filterRow}>
+              {([['all', 'Semua'], ['pending', 'Pending'], ['withdrawn', 'Sudah Dibayar']] as const).map(([key, label]) => (
+                <TouchableOpacity
+                  key={key}
+                  style={[s.filterChip, historyFilter === key && s.filterChipActive]}
+                  onPress={() => setHistoryFilter(key)}
+                >
+                  <Text style={[s.filterChipText, historyFilter === key && s.filterChipTextActive]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <FlatList
+              data={withdrawalHistory.filter(w => historyFilter === 'all' || w.status === historyFilter)}
+              keyExtractor={(w) => w.id.toString()}
+              renderItem={({ item: w }) => <HistoryRow w={w} rp={rp} locale={idLocale} />}
+              contentContainerStyle={{ paddingBottom: 24 }}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={
+                <View style={s.emptyState}>
+                  <MaterialIcons name="history" size={40} color="#D1D5DB" />
+                  <Text style={s.emptyText}>Tidak ada riwayat</Text>
+                </View>
+              }
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Modal Semua Transaksi ────────────────────────────────────────── */}
+      <Modal visible={showTxModal} transparent animationType="slide">
+        <Pressable style={s.sheetOverlay} onPress={() => setShowTxModal(false)}>
+          <Pressable style={s.bottomSheet}>
+            <View style={s.sheetHandle} />
+            <View style={s.sheetHeader}>
+              <Text style={s.sheetTitle}>Detail Transaksi ({transactions.length})</Text>
+              <TouchableOpacity onPress={() => setShowTxModal(false)} style={s.sheetClose}>
+                <MaterialIcons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={s.tableHeader}>
+              <Text style={[s.th, { flex: 1 }]}>ID & Waktu</Text>
+              <Text style={[s.th, { width: 90, textAlign: 'right' }]}>Revenue</Text>
+              <Text style={[s.th, { width: 80, textAlign: 'right' }]}>Margin</Text>
+            </View>
+
+            <FlatList
+              data={transactions}
+              keyExtractor={(tx) => tx.transaction_id}
+              renderItem={({ item: tx, index: i }) => <TxRow tx={tx} i={i} rp={rp} locale={idLocale} />}
+              contentContainerStyle={{ paddingBottom: 24 }}
+              showsVerticalScrollIndicator={false}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function HistoryRow({ w, rp, locale }: { w: WithdrawalWithUser; rp: (v: number) => string; locale: any }) {
+  return (
+    <View style={s.historyRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.historyPeriod}>
+          {format(new Date(w.period_start), 'd MMM', { locale })} - {format(new Date(w.period_end), 'd MMM yyyy', { locale })}
+        </Text>
+        <Text style={s.historyAmountLabel}>Harga beli</Text>
+        <Text style={s.historyAmount}>{rp(w.amount)}</Text>
+        {w.status === 'withdrawn' && w.withdrawn_at && (
+          <Text style={s.historyMeta}>
+            Dibayar {format(new Date(w.withdrawn_at), 'dd MMM yyyy, HH:mm', { locale })}
+            {w.withdrawn_by_name ? ` oleh ${w.withdrawn_by_name}` : ''}
+          </Text>
+        )}
+      </View>
+      <View style={[s.historyBadge, w.status === 'withdrawn' ? s.historyBadgeDone : s.historyBadgePending]}>
+        <Text style={[s.historyBadgeText, { color: w.status === 'withdrawn' ? '#10B981' : '#F59E0B' }]}>
+          {w.status === 'withdrawn' ? 'Sudah' : 'Pending'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function TxRow({ tx, i, rp, locale }: { tx: TransactionGroup; i: number; rp: (v: number) => string; locale: any }) {
+  return (
+    <View style={[s.tableRow, i % 2 === 1 && s.tableRowAlt]}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.txId}>#{tx.transaction_id.toString().slice(-6)}</Text>
+        <Text style={s.txTime}>{format(new Date(tx.created_at), 'dd MMM HH:mm', { locale })}</Text>
+        <Text style={s.txItems} numberOfLines={1}>
+          {tx.items.map(it => `${it.quantity}× ${it.product_name}`).join(', ')}
+        </Text>
+      </View>
+      <Text style={[s.td, s.tdAmount, { width: 90 }]}>{rp(tx.total)}</Text>
+      <Text style={[s.td, s.tdMargin, { width: 80 }]}>{rp(tx.margin)}</Text>
     </View>
   );
 }
@@ -1098,4 +1201,38 @@ const s = StyleSheet.create({
   // Empty
   emptyState: { alignItems: 'center', paddingVertical: 40 },
   emptyText:  { color: '#9CA3AF', marginTop: 10, fontSize: 13 },
+
+  // Show All button
+  showAllBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: 12, marginTop: 4,
+    backgroundColor: '#FDF2F4', borderRadius: 12,
+    borderWidth: 1, borderColor: '#F5C0CA',
+  },
+  showAllText: { fontSize: 13, fontWeight: '700', color: ACCENT },
+
+  // Bottom Sheet Modal
+  sheetOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  bottomSheet: {
+    backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 16, paddingBottom: 16, paddingTop: 12,
+    width: '100%', maxHeight: '85%',
+  },
+  sheetHandle: { width: 40, height: 4, backgroundColor: '#E5E7EB', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  sheetTitle:  { fontSize: 17, fontWeight: '800', color: '#111827' },
+  sheetClose:  { width: 32, height: 32, borderRadius: 10, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
+
+  // Filter chips in modal
+  filterRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  filterChip: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+    backgroundColor: '#F3F4F6', borderWidth: 1.5, borderColor: '#E5E7EB',
+  },
+  filterChipActive: { backgroundColor: ACCENT, borderColor: ACCENT },
+  filterChipText:   { fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  filterChipTextActive: { color: '#fff' },
 });

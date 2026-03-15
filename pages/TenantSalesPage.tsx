@@ -4,7 +4,6 @@ import {
   View,
   Text,
   ScrollView,
-  FlatList,
   TouchableOpacity,
   RefreshControl,
   StyleSheet,
@@ -850,7 +849,12 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
       {/* ── Modal Riwayat Pembayaran ─────────────────────────────────────── */}
       <Modal visible={showHistoryModal} transparent animationType="slide">
         <Pressable style={s.sheetOverlay} onPress={() => setShowHistoryModal(false)}>
-          <Pressable style={s.bottomSheet}>
+          <ScrollView
+            style={s.bottomSheet}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
             <View style={s.sheetHandle} />
             <View style={s.sheetHeader}>
               <Text style={s.sheetTitle}>Riwayat Pembayaran</Text>
@@ -872,27 +876,30 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
               ))}
             </View>
 
-            <FlatList
-              data={withdrawalHistory.filter(w => historyFilter === 'all' || w.status === historyFilter)}
-              keyExtractor={(w) => w.id.toString()}
-              renderItem={({ item: w }) => <HistoryRow w={w} rp={rp} locale={idLocale} />}
-              contentContainerStyle={{ paddingBottom: 24 }}
-              showsVerticalScrollIndicator={false}
-              ListEmptyComponent={
+            {(() => {
+              const filtered = withdrawalHistory.filter(w => historyFilter === 'all' || w.status === historyFilter);
+              return filtered.length > 0 ? filtered.map((w) => (
+                <HistoryRow key={w.id} w={w} rp={rp} locale={idLocale} />
+              )) : (
                 <View style={s.emptyState}>
                   <MaterialIcons name="history" size={40} color="#D1D5DB" />
                   <Text style={s.emptyText}>Tidak ada riwayat</Text>
                 </View>
-              }
-            />
-          </Pressable>
+              );
+            })()}
+          </ScrollView>
         </Pressable>
       </Modal>
 
       {/* ── Modal Semua Transaksi ────────────────────────────────────────── */}
       <Modal visible={showTxModal} transparent animationType="slide">
         <Pressable style={s.sheetOverlay} onPress={() => setShowTxModal(false)}>
-          <Pressable style={s.bottomSheet}>
+          <ScrollView
+            style={s.bottomSheet}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
             <View style={s.sheetHandle} />
             <View style={s.sheetHeader}>
               <Text style={s.sheetTitle}>Detail Transaksi ({transactions.length})</Text>
@@ -907,14 +914,10 @@ export default function TenantSalesPage({ tenantId, role }: Props) {
               <Text style={[s.th, { width: 80, textAlign: 'right' }]}>Margin</Text>
             </View>
 
-            <FlatList
-              data={transactions}
-              keyExtractor={(tx) => tx.transaction_id}
-              renderItem={({ item: tx, index: i }) => <TxRow tx={tx} i={i} rp={rp} locale={idLocale} />}
-              contentContainerStyle={{ paddingBottom: 24 }}
-              showsVerticalScrollIndicator={false}
-            />
-          </Pressable>
+            {transactions.map((tx, i) => (
+              <TxRow key={tx.transaction_id} tx={tx} i={i} rp={rp} locale={idLocale} />
+            ))}
+          </ScrollView>
         </Pressable>
       </Modal>
     </View>

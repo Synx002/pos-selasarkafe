@@ -312,6 +312,41 @@ export default function Dashboard({ role }: DashboardProps) {
       const activeFilterLabel = dateRangeLabel;
       const dateStr = format(new Date(), 'dd MMMM yyyy, HH:mm', { locale: id });
 
+      // Untuk PDF kasir/storeman → fetch top products hari ini (bukan bulan ini)
+      let pdfTopProducts = topProducts;
+      if (!isOwner) {
+        const todayStart = startOfDay(new Date()).toISOString();
+        const todayEnd   = endOfDay(new Date()).toISOString();
+        const { data: todayTxns } = await supabase
+          .from('transactions')
+          .select('transaction_id')
+          .eq('transaction_status', 'completed')
+          .gte('created_at', todayStart)
+          .lte('created_at', todayEnd);
+        const todayIds = todayTxns?.map(t => t.transaction_id) ?? [];
+        if (todayIds.length > 0) {
+          const { data: tiData } = await supabase
+            .from('transaction_details')
+            .select('product_id, quantity, products(product_name, selling_price)')
+            .in('transaction_id', todayIds);
+          const productMap: Record<number, { name: string; price: number; qty: number }> = {};
+          tiData?.forEach((ti) => {
+            const pid  = ti.product_id;
+            const prod = Array.isArray(ti.products) ? ti.products[0] : ti.products;
+            if (!productMap[pid]) {
+              productMap[pid] = { name: prod?.product_name ?? '—', price: prod?.selling_price ?? 0, qty: 0 };
+            }
+            productMap[pid].qty += ti.quantity ?? 0;
+          });
+          pdfTopProducts = Object.entries(productMap)
+            .sort((a, b) => b[1].qty - a[1].qty)
+            .slice(0, 6)
+            .map(([, v]) => v);
+        } else {
+          pdfTopProducts = [];
+        }
+      }
+
       const paymentRows = paymentBreakdown.map(p => `
         <div style="display:flex; justify-content:space-between; margin-bottom:8px; border-bottom:1px solid #f0f0f0; padding-bottom:4px;">
           <span style="color:#6b7280">${p.label}</span>
@@ -349,7 +384,7 @@ export default function Dashboard({ role }: DashboardProps) {
         <tr>${statCards.slice(2, 3).join('')}</tr>
       `;
 
-      const topProductRows = topProducts.map((p, i) => `
+      const topProductRows = pdfTopProducts.map((p, i) => `
         <tr style="border-bottom:1px solid #f0f0f0;">
           <td style="padding:8px 0;">${i + 1}</td>
           <td style="padding:8px 0;">${p.name}</td>
@@ -381,7 +416,7 @@ export default function Dashboard({ role }: DashboardProps) {
           </div>` : ''}
 
           <div>
-            <h3 style="border-bottom: 2px solid #C8576A; padding-bottom: 8px; margin-bottom: 16px;">Top Menu Terlaris (${isOwner ? activeFilterLabel : 'Bulan Ini'})</h3>
+            <h3 style="border-bottom: 2px solid #C8576A; padding-bottom: 8px; margin-bottom: 16px;">Top Menu Terlaris (${isOwner ? activeFilterLabel : 'Hari Ini'})</h3>
             <table style="width: 100%; border-collapse: collapse;">
               <thead>
                 <tr style="text-align: left; color: #6b7280; font-size: 12px;">
@@ -607,7 +642,7 @@ export default function Dashboard({ role }: DashboardProps) {
             iconColor="#16A34A"
             label="Laba Bersih"
             value={`Rp ${netProfit.toLocaleString('id-ID')}`}
-            suffix=""
+            suffix="Laba"
             prev={prevNetProfit}
             current={netProfit}
             isCurrency

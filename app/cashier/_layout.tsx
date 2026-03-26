@@ -5,7 +5,7 @@ const MENU: SidebarMenuItem[] = [
   { label: 'Dashboard',  icon: 'dashboard',        path: '/cashier' },
   { label: 'Transaksi', icon: 'shopping-cart', path: '/cashier/transaction' },
   { label: 'Riwayat',   icon: 'history',        path: '/cashier/history' },
-  { label: 'Stok',      icon: 'inventory',      path: '/cashier/stock' },
+  { label: 'Stok',      icon: 'move-to-inbox',      path: '/cashier/stock' },
   { label: 'Pengaturan', icon: 'settings',       path: '/cashier/settings' },
 ];
 

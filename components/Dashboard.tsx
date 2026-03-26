@@ -381,7 +381,7 @@ export default function Dashboard({ role }: DashboardProps) {
       });
       const statRowsHtml = `
         <tr>${statCards.slice(0, 2).join('')}</tr>
-        <tr>${statCards.slice(2, 3).join('')}</tr>
+        <tr>${statCards.slice(2, 4).join('')}</tr>
       `;
 
       const topProductRows = pdfTopProducts.map((p, i) => `

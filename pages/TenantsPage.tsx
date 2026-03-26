@@ -37,6 +37,34 @@ type Props = { role: 'owner' | 'storeman' };
 
 const emptyForm = { tenant_name: '', email: '', phone_number: '' };
 
+type WithdrawalRow = {
+  tenant_id: number;
+  amount: number | null;
+  withdrawn_amount: number | null;
+  status: string;
+};
+
+function computeWithdrawalState(rows: WithdrawalRow[] | null | undefined) {
+  const ids = new Set<number>();
+  const amounts: Record<number, number> = {};
+  const withdrawn = new Set<number>();
+  for (const w of rows || []) {
+    let pending = 0;
+    if (w.status === 'pending') {
+      pending = w.amount || 0;
+    } else if (w.status === 'withdrawn') {
+      withdrawn.add(w.tenant_id);
+      const paid = w.withdrawn_amount ?? w.amount ?? 0;
+      pending = Math.max(0, (w.amount || 0) - paid);
+    }
+    if (pending > 0) {
+      ids.add(w.tenant_id);
+      amounts[w.tenant_id] = (amounts[w.tenant_id] || 0) + pending;
+    }
+  }
+  return { ids, amounts, withdrawn };
+}
+
 export default function TenantsPage({ role }: Props) {
   const router            = useRouter();
   const { width, height } = useWindowDimensions();
@@ -58,39 +86,46 @@ export default function TenantsPage({ role }: Props) {
   const [pendingAmountByTenant, setPendingAmountByTenant] = useState<Record<number, number>>({});
   const [hasWithdrawnByTenant, setHasWithdrawnByTenant] = useState<Set<number>>(new Set());
 
-  const fetchTenants = useCallback(async () => {
-    setRefreshing(true);
-    await syncWithdrawalsForCurrentWeek();
-    const [tenantsRes, withdrawalsRes] = await Promise.all([
-      supabase.from('tenants').select('*').order('tenant_name'),
-      supabase.from('tenant_withdrawals').select('tenant_id, amount, withdrawn_amount, status'),
-    ]);
-    setTenants(tenantsRes.data || []);
-    const ids = new Set<number>();
-    const amounts: Record<number, number> = {};
-    const withdrawn = new Set<number>();
-    for (const w of withdrawalsRes.data || []) {
-      let pending = 0;
-      if (w.status === 'pending') {
-        pending = w.amount || 0;
-      } else if (w.status === 'withdrawn') {
-        withdrawn.add(w.tenant_id);
-        const paid = w.withdrawn_amount ?? w.amount ?? 0;
-        pending = Math.max(0, (w.amount || 0) - paid);
-      }
-      if (pending > 0) {
-        ids.add(w.tenant_id);
-        amounts[w.tenant_id] = (amounts[w.tenant_id] || 0) + pending;
-      }
-    }
+  const applyWithdrawalRows = useCallback((rows: WithdrawalRow[] | null | undefined) => {
+    const { ids, amounts, withdrawn } = computeWithdrawalState(rows);
     setPendingWithdrawalIds(ids);
     setPendingAmountByTenant(amounts);
     setHasWithdrawnByTenant(withdrawn);
-    setLoading(false);
-    setRefreshing(false);
   }, []);
 
-  useEffect(() => { fetchTenants(); }, []);
+  /** Muat daftar tenant + withdrawal langsung; sync mingguan jalan di background agar halaman tidak tertahan. */
+  const fetchTenants = useCallback(async (opts?: { showRefreshing?: boolean }) => {
+    const showRefreshing = opts?.showRefreshing === true;
+    if (showRefreshing) setRefreshing(true);
+
+    try {
+      const [tenantsRes, withdrawalsRes] = await Promise.all([
+        supabase.from('tenants').select('*').order('tenant_name'),
+        supabase.from('tenant_withdrawals').select('tenant_id, amount, withdrawn_amount, status'),
+      ]);
+      setTenants(tenantsRes.data || []);
+      applyWithdrawalRows(withdrawalsRes.data as WithdrawalRow[] | null);
+    } finally {
+      setLoading(false);
+      if (showRefreshing) setRefreshing(false);
+    }
+
+    void (async () => {
+      try {
+        await syncWithdrawalsForCurrentWeek();
+        const { data } = await supabase
+          .from('tenant_withdrawals')
+          .select('tenant_id, amount, withdrawn_amount, status');
+        applyWithdrawalRows(data as WithdrawalRow[] | null);
+      } catch (e) {
+        console.error('syncWithdrawalsForCurrentWeek', e);
+      }
+    })();
+  }, [applyWithdrawalRows]);
+
+  useEffect(() => {
+    void fetchTenants();
+  }, [fetchTenants]);
 
   const openAdd = () => {
     setEditTarget(null);
@@ -248,7 +283,12 @@ export default function TenantsPage({ role }: Props) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ padding: GAP / 2, paddingHorizontal: 16 - GAP / 2, paddingBottom: 100 }}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={fetchTenants} colors={[ACCENT]} tintColor={ACCENT} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void fetchTenants({ showRefreshing: true })}
+            colors={[ACCENT]}
+            tintColor={ACCENT}
+          />
         }
       >
         {/* Header */}
@@ -260,7 +300,7 @@ export default function TenantsPage({ role }: Props) {
           <View style={s.headerRight}>
             <TouchableOpacity
               style={s.refreshBtn}
-              onPress={fetchTenants}
+              onPress={() => void fetchTenants({ showRefreshing: true })}
               disabled={refreshing}
               activeOpacity={0.7}
             >
